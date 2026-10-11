@@ -1,0 +1,18 @@
+{
+  "name": "FocusDock - บันทึกการพักมือถือ & อ่านหนังสือ",
+  "short_name": "FocusDock",
+  "description": "เว็บแอปพลิเคชันสำหรับเชื่อมต่อแท่นวางมือถืออัจฉริยะ ตรวจจับการหยิบมือถือ สถิติรายสัปดาห์ และจับเวลาอ่านหนังสือ",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#FAF9F5",
+  "theme_color": "#3D6A55",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "./icon.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any maskable"
+    }
+  ]
+}

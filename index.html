@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>FocusDock - บันทึกการพักมือถือ & อ่านหนังสือ</title>
+  <meta name="description" content="ระบบติดตามการหยิบจับมือถือ สถิติรายสัปดาห์ และจับเวลาโหมดอ่านหนังสือ/โหมดพักจากมือถือ ทำงานร่วมกับอุปกรณ์ IoT ผ่าน Firebase">
+  <link rel="icon" type="image/jpeg" href="./icon.jpg">
+  <link rel="apple-touch-icon" href="./icon.jpg">
+  <link rel="manifest" href="./manifest.json">
+  <meta name="theme-color" content="#345E49">
+
+  <!-- Firebase Compat CDN (Works out of the box without build step) -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+
+  <!-- Desktop Preview Controls -->
+  <div class="desktop-preview-bar">
+    <button class="preview-toggle-btn" id="btnToggleFrame" title="สลับโหมดมุมมอง">
+      📱 โหมดจำลองมือถือ / เต็มจอ
+    </button>
+  </div>
+
+  <div class="viewport-wrapper">
+    <div class="mobile-app-frame" id="appFrame">
+      
+      <!-- Top Mobile Island / Status bar -->
+      <header class="phone-island-bar">
+        <span id="statusBarClock">09:41</span>
+        <div class="island-notch">
+          <div class="island-camera"></div>
+          <div class="island-sensor"></div>
+        </div>
+        <div style="display:flex; align-items:center; gap:4px;">
+          <svg width="15" height="11" viewBox="0 0 15 11" fill="currentColor">
+            <path d="M1 8.5C2.5 7 5 6 7.5 6C10 6 12.5 7 14 8.5M3 5.5C4.5 4 6 3.5 7.5 3.5C9 3.5 10.5 4 12 5.5M5 2.5C6 1.8 6.7 1.5 7.5 1.5C8.3 1.5 9 1.8 10 2.5M7.5 10.5C7.2 10.5 7 10.3 7 10C7 9.7 7.2 9.5 7.5 9.5C7.8 9.5 8 9.7 8 10C8 10.3 7.8 10.5 7.5 10.5Z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+          </svg>
+          <svg width="18" height="9" viewBox="0 0 20 10" fill="currentColor">
+            <rect x="1" y="1" width="16" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"/>
+            <rect x="2.5" y="2.5" width="12" height="5" rx="1"/>
+            <path d="M18.5 3.5V6.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+          </svg>
+        </div>
+      </header>
+
+      <!-- App Header -->
+      <nav class="app-header">
+        <div class="brand-wrapper">
+          <img src="./icon.jpg" alt="FocusDock Logo" class="brand-logo-img">
+          <div>
+            <h1 class="brand-title">FocusDock</h1>
+            <p class="brand-subtitle">แท่นวางมือถืออัจฉริยะ</p>
+          </div>
+        </div>
+        
+        <div class="header-status-pill" id="btnHeaderStatus" title="สถานะการเชื่อมต่อ">
+          <span class="status-dot demo" id="statusDot"></span>
+          <span id="statusLabel">โหมดจำลอง</span>
+        </div>
+      </nav>
+
+      <!-- Main Scrollable Content -->
+      <main class="app-content">
+
+        <!-- ============================================== -->
+        <!-- TAB 1: TIMER & LIVE STATUS SCREEN              -->
+        <!-- ============================================== -->
+        <section class="tab-screen active" id="tabTimer">
+
+          <!-- Mode Switcher Segmented Control -->
+          <div class="segmented-mode-bar" role="tablist">
+            <button class="mode-segment-btn active" id="modeBtnStudy" data-mode="study">
+              <span>📖</span> โหมดอ่านหนังสือ
+            </button>
+            <button class="mode-segment-btn" id="modeBtnDetox" data-mode="detox">
+              <span>📵</span> โหมดพักจากมือถือ
+            </button>
+          </div>
+
+          <!-- REAL-TIME HARDWARE PICKUP STATUS CARD -->
+          <div class="live-pickup-card" id="pickupStatusCard">
+            <div class="pickup-status-header">
+              <span class="status-badge resting" id="pickupBadge">
+                <span class="pulse-indicator"></span>
+                <span id="pickupBadgeText">วางอยู่บนแท่นพัก</span>
+              </span>
+              <span style="font-size: 11px; color: var(--text-muted); font-family: var(--font-en);" id="lastSyncTime">อัปเดตสด</span>
+            </div>
+
+            <div class="pickup-main-info">
+              <div class="pickup-title-group">
+                <h3 id="pickupStatusTitle">วางมือถือบนแท่นแล้ว</h3>
+                <p class="pickup-subtitle" id="pickupStatusDesc">มีสมาธิกับการอ่านหนังสือได้อย่างเต็มที่</p>
+              </div>
+
+              <!-- Live timer if currently picked up -->
+              <div class="live-timer-badge" id="liveHoldingTimerWrap" style="display: none;">
+                <span class="live-timer-label">กำลังจับอยู่</span>
+                <span class="live-timer-val" id="liveHoldingTimer">00:00</span>
+              </div>
+            </div>
+
+            <div class="pickup-today-bar">
+              <span>หยิบมือถือวันนี้: <span class="highlight-count" id="todayPickupsCount">0</span> ครั้ง</span>
+              <span>รวมเวลาจับ: <span class="highlight-count" id="todayPickupDuration">0 นาที</span></span>
+            </div>
+          </div>
+
+          <!-- CIRCULAR PROGRESS TIMER HERO CARD -->
+          <div class="timer-hero-card">
+            <div class="phase-chip" id="phaseChip">
+              <span id="phaseIcon">📖</span>
+              <span id="phaseLabel">กำลังอ่านหนังสือ</span>
+            </div>
+
+            <!-- SVG Circular Timer -->
+            <div class="circle-timer-wrap">
+              <svg class="circle-timer-svg" viewBox="0 0 200 200">
+                <circle class="circle-track" cx="100" cy="100" r="88" />
+                <circle class="circle-progress" id="circleProgressBar" cx="100" cy="100" r="88" 
+                  stroke-dasharray="552.92" stroke-dashoffset="0" />
+              </svg>
+
+              <div class="timer-inner-content">
+                <div class="timer-digits" id="timerDisplay">25:00</div>
+                <div class="timer-phase-caption" id="timerCaption">พร้อมเริ่มจับเวลา</div>
+              </div>
+            </div>
+
+            <!-- Pomodoro Cycle Indicator Dots -->
+            <div class="pomodoro-cycle-dots" id="pomodoroDots">
+              <span class="cycle-dot filled"></span>
+              <span class="cycle-dot"></span>
+              <span class="cycle-dot"></span>
+              <span class="cycle-dot"></span>
+            </div>
+
+            <!-- Remote Control Buttons (Works via Web or Physical Device Button) -->
+            <div class="control-actions-wrapper">
+              <div class="primary-control-row">
+                <button class="btn-ctrl btn-ctrl-primary" id="btnMainAction">
+                  <span id="btnMainActionIcon">▶</span>
+                  <span id="btnMainActionText">เริ่มจับเวลา</span>
+                </button>
+                <button class="btn-ctrl btn-ctrl-secondary" id="btnPauseAction" style="display: none;">
+                  <span>⏸</span> พัก
+                </button>
+                <button class="btn-ctrl btn-ctrl-reset" id="btnResetAction" title="รีเซ็ตเวลา">
+                  <span>⏹</span>
+                </button>
+              </div>
+
+              <div class="hardware-sync-hint">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                </svg>
+                <span>กดปุ่มที่ตัวเครื่องหรือกดบนเว็บเพื่อสั่งงานร่วมกันได้</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Quick Presets -->
+          <div class="quick-presets-section">
+            <div class="section-label">
+              <span>เลือกเวลาสำเร็จรูป</span>
+              <span style="font-size: 11px; color: var(--text-muted); cursor: pointer;" id="btnGoSettings">กำหนดเอง ⚙️</span>
+            </div>
+            <div class="preset-pills-row" id="presetPillsContainer">
+              <!-- Dynamically populated based on active mode -->
+            </div>
+          </div>
+
+        </section>
+
+        <!-- ============================================== -->
+        <!-- TAB 2: PICKUP HISTORY TIMELINE SCREEN          -->
+        <!-- ============================================== -->
+        <section class="tab-screen" id="tabHistory">
+          
+          <div style="margin-bottom: 14px;">
+            <h2 style="font-size: 18px; font-weight: 600;">ประวัติการหยิบจับมือถือ</h2>
+            <p style="font-size: 12px; color: var(--text-secondary);">บันทึกเวลาจริงและระยะเวลาที่ใช้งานในแต่ละครั้ง</p>
+          </div>
+
+          <!-- Filter Bar -->
+          <div class="history-filter-bar">
+            <button class="filter-chip active" data-filter="all">ทั้งหมด</button>
+            <button class="filter-chip" data-filter="today">วันนี้</button>
+            <button class="filter-chip" data-filter="yesterday">เมื่อวาน</button>
+            <button class="filter-chip" data-filter="study">ขณะอ่านหนังสือ</button>
+            <button class="filter-chip" data-filter="detox">ขณะพักมือถือ</button>
+          </div>
+
+          <!-- Timeline List Container -->
+          <div class="pickup-timeline-list" id="pickupTimelineContainer">
+            <!-- Dynamically populated -->
+          </div>
+
+        </section>
+
+        <!-- ============================================== -->
+        <!-- TAB 3: WEEKLY ANALYTICS & INSIGHTS             -->
+        <!-- ============================================== -->
+        <section class="tab-screen" id="tabStats">
+
+          <div style="margin-bottom: 14px;">
+            <h2 style="font-size: 18px; font-weight: 600;">สถิติการจับมือถือใน 1 สัปดาห์</h2>
+            <p style="font-size: 12px; color: var(--text-secondary);">วิเคราะห์พฤติกรรมการแตะมือถือและเวลาที่ใช้</p>
+          </div>
+
+          <!-- Weekly KPI Summary Cards -->
+          <div class="weekly-kpi-grid">
+            <div class="kpi-card alert-highlight">
+              <span class="kpi-caption">หยิบใน 1 สัปดาห์</span>
+              <div class="kpi-value" id="kpiWeeklyTotalCount">0</div>
+              <span class="kpi-unit">ครั้ง</span>
+            </div>
+
+            <div class="kpi-card highlight">
+              <span class="kpi-caption">เฉลี่ยต่อครั้ง</span>
+              <div class="kpi-value" id="kpiWeeklyAvgDuration">0</div>
+              <span class="kpi-unit">นาที/ครั้ง</span>
+            </div>
+
+            <div class="kpi-card">
+              <span class="kpi-caption">เวลารวมทั้งสัปดาห์</span>
+              <div class="kpi-value" id="kpiWeeklyTotalTime">0</div>
+              <span class="kpi-unit">นาที</span>
+            </div>
+          </div>
+
+          <!-- 7-Day Interactive Bar Chart -->
+          <div class="chart-card">
+            <div class="chart-header">
+              <span class="chart-title">สถิติย้อนหลัง 7 วัน</span>
+              <div class="chart-metric-switch">
+                <button class="chart-switch-btn active" id="btnMetricCount">จำนวนครั้ง</button>
+                <button class="chart-switch-btn" id="btnMetricMinutes">เวลารวม</button>
+              </div>
+            </div>
+
+            <div class="bar-chart-container" id="barChartContainer">
+              <!-- Dynamically populated SVG columns -->
+            </div>
+
+            <!-- Detail Box of Clicked Day -->
+            <div class="selected-day-detail-box" id="selectedDayDetailBox">
+              <div>
+                <strong id="detailDayTitle">วันพุธ</strong>: หยิบ <span id="detailDayPickups">0</span> ครั้ง
+              </div>
+              <div style="color: var(--text-secondary); font-size: 12px;">
+                เฉลี่ยครั้งละ <strong id="detailDayAvg">0</strong> นาที (รวม <span id="detailDayTotal">0</span> นาที)
+              </div>
+            </div>
+          </div>
+
+          <!-- Focus Habit Insight Card -->
+          <div class="settings-section-card" style="background: linear-gradient(135deg, var(--bg-card) 0%, var(--sage-light) 100%); border-color: var(--sage-border);">
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+              <span style="font-size: 18px;">💡</span>
+              <strong style="font-size: 14px; color: var(--sage-main);">ข้อแนะนำเพื่อสมาธิที่ดีขึ้น</strong>
+            </div>
+            <p style="font-size: 12px; color: var(--text-secondary); line-height: 1.6;" id="insightText">
+              คุณหยิบมือถือเฉลี่ยครั้งละ 3.2 นาที การวางมือถือไว้บนแท่นและตั้งเป้าหมายในโหมดอ่านหนังสือรอบละ 25 นาทีจะช่วยลดการเสียสมาธิได้ถึง 40%
+            </p>
+          </div>
+
+        </section>
+
+        <!-- ============================================== -->
+        <!-- TAB 4: SETTINGS & HARDWARE CONNECT             -->
+        <!-- ============================================== -->
+        <section class="tab-screen" id="tabSettings">
+          
+          <div style="margin-bottom: 14px;">
+            <h2 style="font-size: 18px; font-weight: 600;">ตั้งค่าระบบ & อุปกรณ์</h2>
+            <p style="font-size: 12px; color: var(--text-secondary);">ปรับระยะเวลาของแต่ละโหมดและเชื่อมต่อ Firebase</p>
+          </div>
+
+          <!-- MODE 1: STUDY MODE SETTINGS -->
+          <div class="settings-section-card">
+            <div class="settings-card-title">
+              <span>📖</span>
+              <span>ตั้งค่า: โหมดอ่านหนังสือ</span>
+            </div>
+
+            <div class="setting-row">
+              <label class="setting-label" for="inputStudyMinutes">เวลาอ่านหนังสือ (Focus Time)</label>
+              <div class="setting-input-wrapper">
+                <input type="number" id="inputStudyMinutes" class="setting-input" min="1" max="180" value="25">
+                <span class="setting-input-unit">นาที</span>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <label class="setting-label" for="inputBreakMinutes">เวลาพักสายตา (Break Time)</label>
+              <div class="setting-input-wrapper">
+                <input type="number" id="inputBreakMinutes" class="setting-input" min="1" max="60" value="5">
+                <span class="setting-input-unit">นาที</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- MODE 2: DIGITAL DETOX SETTINGS -->
+          <div class="settings-section-card">
+            <div class="settings-card-title">
+              <span>📵</span>
+              <span>ตั้งค่า: โหมดพักจากมือถือ</span>
+            </div>
+
+            <div class="setting-row">
+              <label class="setting-label" for="inputDetoxMinutes">เวลาที่ไม่แตะมือถือ (Detox Time)</label>
+              <div class="setting-input-wrapper">
+                <input type="number" id="inputDetoxMinutes" class="setting-input" min="1" max="360" value="45">
+                <span class="setting-input-unit">นาที</span>
+              </div>
+            </div>
+
+            <button class="btn-save-full" id="btnSaveModeSettings">
+              💾 บันทึกเวลาลงเครื่อง & เว็บ
+            </button>
+          </div>
+
+          <!-- FIREBASE CONFIGURATION CARD -->
+          <div class="settings-section-card">
+            <div class="settings-card-title">
+              <span>🔥</span>
+              <span>การตั้งค่าเชื่อมต่อ Firebase</span>
+            </div>
+            <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 12px;">
+              กรอกข้อมูลโปรเจกต์ Firebase Realtime Database ของคุณเพื่อเชื่อมกับบอร์ด ESP32 / Arduino
+            </p>
+
+            <div class="setting-row">
+              <label class="setting-label" for="cfgDatabaseUrl">Database URL</label>
+              <div class="setting-input-wrapper">
+                <input type="text" id="cfgDatabaseUrl" class="setting-input" placeholder="https://your-app-default-rtdb.firebaseio.com">
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <label class="setting-label" for="cfgApiKey">API Key</label>
+              <div class="setting-input-wrapper">
+                <input type="password" id="cfgApiKey" class="setting-input" placeholder="AIzaSy...">
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <label class="setting-label" for="cfgProjectId">Project ID</label>
+              <div class="setting-input-wrapper">
+                <input type="text" id="cfgProjectId" class="setting-input" placeholder="your-project-id">
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <label class="setting-label" for="cfgDeviceNode">Device ID (Node Key)</label>
+              <div class="setting-input-wrapper">
+                <input type="text" id="cfgDeviceNode" class="setting-input" value="focus_dock_01">
+              </div>
+            </div>
+
+            <button class="btn-save-full" id="btnSaveFirebaseConfig" style="background: #E65100;">
+              🔗 เชื่อมต่อกับ Firebase
+            </button>
+          </div>
+
+          <!-- FIRMWARE GUIDE LINK -->
+          <div class="settings-section-card" style="text-align: center;">
+            <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 8px;">
+              ต้องการโค้ดตัวอย่างสำหรับแฟลชลง ESP32 หรือไม่?
+            </p>
+            <p style="font-size: 11px; color: var(--text-muted);">
+              มีไฟล์โค้ดบอร์ดสมบูรณ์แบบพร้อมวิธีต่อวงจรอยู่ในโฟลเดอร์ <code>hardware/esp32_focus_dock.ino</code>
+            </p>
+          </div>
+
+        </section>
+
+      </main>
+
+      <!-- Bottom Floating Toast Notification -->
+      <div class="toast-notice" id="toastNotice">
+        <span id="toastIcon">✨</span>
+        <span id="toastMessage">อัปเดตข้อมูลเรียบร้อย</span>
+      </div>
+
+      <!-- Bottom Mobile Tab Navigation Bar -->
+      <nav class="bottom-nav-bar" role="navigation">
+        <button class="nav-tab-item active" data-target="tabTimer">
+          <svg class="nav-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <polyline points="12 6 12 12 16 14"></polyline>
+          </svg>
+          <span class="nav-tab-label">จับเวลา</span>
+        </button>
+
+        <button class="nav-tab-item" data-target="tabHistory">
+          <svg class="nav-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 8v4l3 3"></path>
+            <path d="M3.05 11a9 9 0 1 1 .5 4m-.5 5v-5h5"></path>
+          </svg>
+          <span class="nav-tab-label">ประวัติ</span>
+        </button>
+
+        <button class="nav-tab-item" data-target="tabStats">
+          <svg class="nav-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="20" x2="18" y2="10"></line>
+            <line x1="12" y1="20" x2="12" y2="4"></line>
+            <line x1="6" y1="20" x2="6" y2="14"></line>
+          </svg>
+          <span class="nav-tab-label">สถิติสัปดาห์</span>
+        </button>
+
+        <button class="nav-tab-item" data-target="tabSettings">
+          <svg class="nav-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+          <span class="nav-tab-label">ตั้งค่า</span>
+        </button>
+      </nav>
+
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="./mock-data.js"></script>
+  <script src="./firebase-config.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
