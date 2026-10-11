@@ -1253,3 +1253,69 @@ body {
 .nav-tab-item.active .nav-tab-icon {
   transform: translateY(-2px);
 }
+
+/* Direct ESP32 Connection Styles */
+.direct-connect-card {
+  border-color: var(--sage-border);
+  background: linear-gradient(180deg, var(--bg-card) 0%, var(--bg-card-subtle) 100%);
+}
+
+.direct-connect-box {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  padding: 14px;
+  box-shadow: var(--shadow-sm);
+}
+
+.ble-status-pill {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-card-subtle);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-light);
+  font-weight: 500;
+}
+
+.ble-status-pill.connected {
+  background: var(--sage-main);
+  color: #FFFFFF !important;
+  border-color: var(--sage-main);
+  font-weight: 600;
+}
+
+.btn-direct-connect {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: var(--radius-pill);
+  border: none;
+  background: var(--sage-main);
+  color: #FFFFFF;
+  font-family: var(--font-thai);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+  transition: all 0.2s ease;
+}
+
+.btn-direct-connect:active {
+  transform: scale(0.98);
+}
+
+.btn-direct-connect.connected {
+  background: #DC2626;
+}
+
+.btn-direct-connect.secondary {
+  background: var(--bg-card-subtle);
+  color: var(--text-main);
+  border: 1px solid var(--border-light);
+  box-shadow: none;
+}
+

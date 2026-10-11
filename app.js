@@ -123,7 +123,11 @@ class FocusDockApp {
 
   saveSettings() {
     localStorage.setItem('focusdock_settings', JSON.stringify(this.settings));
-    window.focusDockFirebase.updateSettings(this.settings);
+    if (window.esp32Direct) {
+      window.esp32Direct.dispatchDirectSettings(this.settings);
+    } else if (window.focusDockFirebase) {
+      window.focusDockFirebase.updateSettings(this.settings);
+    }
   }
 
   loadStoredPickups() {
@@ -214,6 +218,20 @@ class FocusDockApp {
     this.cfgProjectId = document.getElementById('cfgProjectId');
     this.cfgDeviceNode = document.getElementById('cfgDeviceNode');
     this.btnSaveFirebaseConfig = document.getElementById('btnSaveFirebaseConfig');
+
+    // Direct ESP32 Connection elements
+    this.btnConnectBle = document.getElementById('btnConnectBle');
+    this.btnConnectBleIcon = document.getElementById('btnConnectBleIcon');
+    this.btnConnectBleText = document.getElementById('btnConnectBleText');
+    this.bleStatusBadge = document.getElementById('bleStatusBadge');
+
+    this.cfgEsp32Ip = document.getElementById('cfgEsp32Ip');
+    this.btnTestEsp32Ip = document.getElementById('btnTestEsp32Ip');
+    this.ipStatusBadge = document.getElementById('ipStatusBadge');
+
+    if (window.esp32Direct && this.cfgEsp32Ip) {
+      this.cfgEsp32Ip.value = window.esp32Direct.esp32Ip || '';
+    }
 
     // Toast
     this.toastNotice = document.getElementById('toastNotice');
@@ -342,6 +360,86 @@ class FocusDockApp {
         this.showToast('ไม่สามารถเชื่อมต่อได้ ทำงานในโหมดจำลอง');
       }
     });
+
+    // Direct BLE Connect Button
+    if (this.btnConnectBle) {
+      this.btnConnectBle.addEventListener('click', async () => {
+        try {
+          if (window.esp32Direct.isBleConnected) {
+            await window.esp32Direct.disconnectBLE();
+            this.showToast('ตัดการเชื่อมต่อ Bluetooth แล้ว');
+          } else {
+            this.showToast('กำลังค้นหา ESP32 (FocusDock)...');
+            await window.esp32Direct.connectBLE();
+          }
+        } catch (e) {
+          this.showToast(e.message || 'ไม่สามารถเชื่อมต่อได้');
+        }
+      });
+    }
+
+    // Direct IP Connect Button
+    if (this.btnTestEsp32Ip) {
+      this.btnTestEsp32Ip.addEventListener('click', async () => {
+        const ip = this.cfgEsp32Ip.value.trim();
+        if (!ip) return this.showToast('กรุณากรอก IP Address ของ ESP32');
+        this.showToast('กำลังทดสอบเชื่อมต่อ IP...');
+        try {
+          await window.esp32Direct.testDirectIpConnection(ip);
+          this.showToast('🟢 เชื่อมต่อกับบอร์ดผ่าน IP สำเร็จ!');
+        } catch (e) {
+          this.showToast('เชื่อมต่อไม่สำเร็จ: ' + (e.message || 'ตรวจสอบว่าอยู่ใน Wi-Fi เดียวกัน'));
+        }
+      });
+    }
+
+    // Direct Hardware Callbacks
+    if (window.esp32Direct) {
+      window.esp32Direct.onHardwareStateChange = (state) => {
+        this.onHardwareStateReceived(state);
+      };
+
+      window.esp32Direct.onConnectionStatusChange = (type, connected) => {
+        if (type === 'ble') {
+          if (connected) {
+            if (this.bleStatusBadge) {
+              this.bleStatusBadge.textContent = 'เชื่อมต่อแล้ว 🟢';
+              this.bleStatusBadge.className = 'ble-status-pill connected';
+            }
+            if (this.btnConnectBleText) this.btnConnectBleText.textContent = 'ตัดการเชื่อมต่อ Bluetooth';
+            if (this.btnConnectBle) this.btnConnectBle.classList.add('connected');
+            this.statusDot.className = 'status-dot online';
+            this.statusLabel.textContent = 'ESP32 (BLE)';
+            this.showToast('📶 เชื่อมต่อตรงกับ ESP32 สำเร็จ!');
+          } else {
+            if (this.bleStatusBadge) {
+              this.bleStatusBadge.textContent = 'ไม่ได้เชื่อมต่อ';
+              this.bleStatusBadge.className = 'ble-status-pill';
+            }
+            if (this.btnConnectBleText) this.btnConnectBleText.textContent = 'ค้นหาและเชื่อมต่อกับ ESP32';
+            if (this.btnConnectBle) this.btnConnectBle.classList.remove('connected');
+            if (!window.focusDockFirebase.isConnected) {
+              this.statusDot.className = 'status-dot demo';
+              this.statusLabel.textContent = 'โหมดจำลอง';
+            }
+          }
+        } else if (type === 'ip') {
+          if (connected) {
+            if (this.ipStatusBadge) {
+              this.ipStatusBadge.textContent = 'ออนไลน์ 🟢';
+              this.ipStatusBadge.className = 'ble-status-pill connected';
+            }
+            this.statusDot.className = 'status-dot online';
+            this.statusLabel.textContent = 'ESP32 (IP)';
+          } else {
+            if (this.ipStatusBadge) {
+              this.ipStatusBadge.textContent = 'ไม่ได้เชื่อมต่อ';
+              this.ipStatusBadge.className = 'ble-status-pill';
+            }
+          }
+        }
+      };
+    }
   }
 
   // Setup Firebase Realtime Listener
@@ -442,7 +540,11 @@ class FocusDockApp {
     this.remainingSeconds = this.totalPhaseSeconds;
     this.updateTimerDisplay();
     this.renderPresets();
-    window.focusDockFirebase.sendCommand('CHANGE_MODE', mode, this.settings);
+    if (window.esp32Direct) {
+      window.esp32Direct.dispatchDirectCommand('CHANGE_MODE', mode, this.settings);
+    } else if (window.focusDockFirebase) {
+      window.focusDockFirebase.sendCommand('CHANGE_MODE', mode, this.settings);
+    }
   }
 
   // Main Timer Action (Start / Resume)
@@ -475,7 +577,11 @@ class FocusDockApp {
     }, 1000);
 
     this.showToast('▶ เริ่มต้นการจับเวลาแล้ว');
-    window.focusDockFirebase.sendCommand('START', this.activeMode, this.settings);
+    if (window.esp32Direct) {
+      window.esp32Direct.dispatchDirectCommand('START', this.activeMode, this.settings);
+    } else if (window.focusDockFirebase) {
+      window.focusDockFirebase.sendCommand('START', this.activeMode, this.settings);
+    }
   }
 
   togglePause() {
@@ -487,7 +593,11 @@ class FocusDockApp {
       this.btnMainAction.classList.remove('running');
       this.timerCaption.textContent = 'พักการจับเวลาชั่วคราว';
       this.showToast('⏸ หยุดพักชั่วคราว');
-      window.focusDockFirebase.sendCommand('PAUSE', this.activeMode, this.settings);
+      if (window.esp32Direct) {
+        window.esp32Direct.dispatchDirectCommand('PAUSE', this.activeMode, this.settings);
+      } else if (window.focusDockFirebase) {
+        window.focusDockFirebase.sendCommand('PAUSE', this.activeMode, this.settings);
+      }
     } else if (this.timerStatus === 'paused') {
       this.startTimer();
     }
@@ -519,7 +629,11 @@ class FocusDockApp {
 
     this.updateTimerDisplay();
     this.showToast('⏹ รีเซ็ตเวลาเรียบร้อย');
-    window.focusDockFirebase.sendCommand('RESET', this.activeMode, this.settings);
+    if (window.esp32Direct) {
+      window.esp32Direct.dispatchDirectCommand('RESET', this.activeMode, this.settings);
+    } else if (window.focusDockFirebase) {
+      window.focusDockFirebase.sendCommand('RESET', this.activeMode, this.settings);
+    }
   }
 
   // Ticking function
