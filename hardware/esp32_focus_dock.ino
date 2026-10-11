@@ -1,207 +1,488 @@
-/*
-  FocusDock - ESP32 Firmware for Smart Phone Focus Dock
-  โค้ดสำหรับไมโครคอนโทรลเลอร์ ESP32 เชื่อมต่อกับ Firebase Realtime Database
-  
-  ฟังก์ชันการทำงาน:
-  1. ตรวจจับการวาง / ยกมือถือขึ้นจากแท่นวาง (ใช้เซนเซอร์ เช่น Ultrasonic HC-SR04 หรือ IR / Limit Switch)
-  2. รองรับปุ่มกดจริงที่ตัวเครื่อง (Push Button) เพื่อเริ่ม/พักการทำงาน และส่งสถานะไปที่ Firebase
-  3. รับคำสั่งและการตั้งค่าเวลา (โหมดอ่านหนังสือ & โหมดพักมือถือ) จากหน้าเว็บผ่าน Firebase
-  4. แสดงผลสถานะผ่าน LED หรือจอ OLED (ถ้ามี)
-*/
-
 #include <WiFi.h>
 #include <Firebase_ESP_Client.h>
-// Provide the token generation process info.
-#include "addons/TokenHelper.h"
-// Provide the RTDB payload printing info and other helper functions.
-#include "addons/RTDBHelper.h"
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <DHT.h>
+#include <hp_BH1750.h>
+#include <time.h>
 
-// ==========================================
-// 1. การตั้งค่า WiFi และ Firebase
-// ==========================================
-#define WIFI_SSID "YOUR_WIFI_NAME"
-#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+// --- Configuration Wi-Fi & Firebase ---
+#define WIFI_SSID     "1272_2.4GHz"
+#define WIFI_PASSWORD "meijimamrom"
+#define DATABASE_URL  "https://readbook-may-default-rtdb.asia-southeast1.firebasedatabase.app/"
 
-// นำมาจาก Firebase Console > Project Settings
-#define API_KEY "YOUR_FIREBASE_API_KEY"
-// URL ของ Realtime Database เช่น https://your-project-id-default-rtdb.firebaseio.com/
-#define DATABASE_URL "YOUR_FIREBASE_DATABASE_URL"
+#define API_KEY       "AIzaSyBgYBkuAVq-PdwWJxo4gmyyB-O4Xilsar8"
+#define USER_EMAIL    "test0readbook@timer.com"
+#define USER_PASSWORD "Mayyynarakkk83"
 
-// Node ID ของอุปกรณ์นี้ใน Firebase
-#define DEVICE_ID "focus_dock_01"
+// --- Pin Definitions ---
+#define DHTPIN       4   // D4
+#define DHTTYPE      DHT11
+#define IR_PIN       19  // D19
 
-// ==========================================
-// 2. กำหนดขาต่อฮาร์ดแวร์ (Hardware Pins)
-// ==========================================
-#define PIN_BUTTON 18       // ปุ่มกดบนตัวเครื่อง (Active LOW หรือใช้ PULLUP)
-#define PIN_LED_STATUS 2    // ไฟ LED แสดงสถานะ
-#define PIN_BUZZER 19       // บัซเซอร์ส่งเสียงเตือนเบาๆ เมื่อหยิบมือถือ
+// ปุ่มกดตามที่คุณเมกำหนด
+#define BTN_RED_PIN    17 // TX2 (Power / Cancel)
+#define BTN_YELLOW_PIN 15 // D15 (Mode)
+#define BTN_BLUE_PIN   5  // D5  (Time Adjust)
+#define BTN_GREEN_PIN  16 // RX2 (Start / Repeat)
 
-// เซนเซอร์ตรวจจับมือถือ (ตัวอย่าง: Ultrasonic HC-SR04)
-#define PIN_TRIG 5
-#define PIN_ECHO 4
-#define DISTANCE_THRESHOLD_CM 5.0 // ถ้าระยะต่ำกว่า 5 ซม. = มือถือวางอยู่บนแท่น
+// --- OLED Settings (แยก Bus I2C) ---
+#define SCREEN_WIDTH        128
+#define SCREEN_HEIGHT_MAIN  64 
+#define SCREEN_HEIGHT_SUB   32 
 
-// ==========================================
-// 3. ตัวแปรสถานะระบบ
-// ==========================================
+// สร้างวัตถุ I2C สองบัสแยกกันโดยเด็ดขาด
+TwoWire I2C_Main = TwoWire(0); // บัสหลัก: D21 (SDA), D22 (SCL) -> จอหลัก + BH1750 x2
+TwoWire I2C_Sub  = TwoWire(1); // บัสรอง:  D23 (SDA), D18 (SCL) -> จอรอง 0.91"
+
+Adafruit_SSD1306 displayMain(SCREEN_WIDTH, SCREEN_HEIGHT_MAIN, &I2C_Main, -1);
+Adafruit_SSD1306 displaySub(SCREEN_WIDTH, SCREEN_HEIGHT_SUB, &I2C_Sub, -1);
+
+// --- Objects ---
+DHT dht(DHTPIN, DHTTYPE);
+hp_BH1750 bh1750_room;  // ต่ออยู่กับ I2C_Main (Address 0x23)
+hp_BH1750 bh1750_phone; // ต่ออยู่กับ I2C_Main (Address 0x5C)
+
 FirebaseData fbdo;
 FirebaseAuth auth;
 FirebaseConfig config;
 
-bool isPhonePlaced = false;
-bool lastPhoneState = false;
-unsigned long pickupStartMillis = 0;
+enum SystemState {
+  STATE_IDLE,
+  STATE_COUNTDOWN_PREPARE,
+  STATE_RUNNING,
+  STATE_CONFIRM_CANCEL,
+  STATE_FINISHED
+};
 
-// Button debounce
-int lastButtonState = HIGH;
-unsigned long lastDebounceTime = 0;
-const unsigned long debounceDelay = 50;
+SystemState currentState = STATE_IDLE;
 
-// Timer & settings synced from web
-int studyMinutes = 25;
-int breakMinutes = 5;
-int detoxMinutes = 45;
-String currentMode = "study"; // "study" หรือ "detox"
-String timerStatus = "idle";  // "idle", "running", "paused", "break"
+// --- Variables ---
+int currentMode = 1;         
+int durationSec = 600;       // 10 นาทีเริ่มต้น
+int remainingSec = 0;
+int prepareSec = 0;          
+bool isWebStart = false;
 
-// ฟังก์ชันวัดระยะทางของเซนเซอร์ Ultrasonic
-float checkDistance() {
-  digitalWrite(PIN_TRIG, LOW);
-  delayMicroseconds(2);
-  digitalWrite(PIN_TRIG, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(PIN_TRIG, LOW);
+bool phonePlaced = false;
+bool handDetected = false;
+float roomLux = 0, phoneLux = 0;
+float temp = 0, hum = 0;
 
-  long duration = pulseIn(PIN_ECHO, HIGH, 30000); // timeout 30ms
-  if (duration == 0) return 999.0;
-  return (duration * 0.0343) / 2.0;
+// Button Debounce & Timing Management
+unsigned long redPressTime = 0;
+bool redHandled = false;
+
+unsigned long bluePressTime = 0;
+bool blueLongBeepPlayed = false;
+
+unsigned long cancelConfirmStart = 0;
+unsigned long lastTimerMillis = 0;
+unsigned long firebaseSyncMillis = 0;
+
+unsigned long lastDistractionAlertMillis = 0;
+const unsigned long DISTRACTION_COOLDOWN = 3000; 
+
+const char* ntpServer = "pool.ntp.org";
+
+unsigned long long getEpochTimeMs() {
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  return ((unsigned long long)tv.tv_sec * 1000ULL) + (tv.tv_usec / 1000ULL);
+}
+
+void playBuzzerBeep(int freq, int durationMs) {
+  // ใช้พิน D2 สำหรับ Buzzer แทนเพื่อความปลอดภัยไม่ชนบัสจอรอง D18
+  tone(2, freq, durationMs);
+}
+
+void playAlertSound() {
+  tone(2, 2000, 300);
+}
+
+void enterDeepSleep() {
+  displayMain.clearDisplay();
+  displayMain.setCursor(10, 25);
+  displayMain.setTextSize(2);
+  displayMain.setTextColor(WHITE);
+  displayMain.println("POWER OFF");
+  displayMain.display();
+  
+  displaySub.clearDisplay();
+  displaySub.display();
+  delay(1000);
+
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)BTN_RED_PIN, 0); 
+  esp_deep_sleep_start();
+}
+
+void updateFirebaseLiveStatus() {
+  String base = "/status";
+  Firebase.RTDB.setFloat(&fbdo, base + "/temp", isnan(temp) ? 0 : temp);
+  Firebase.RTDB.setFloat(&fbdo, base + "/hum", isnan(hum) ? 0 : hum);
+  Firebase.RTDB.setFloat(&fbdo, base + "/roomLux", roomLux);
+  Firebase.RTDB.setFloat(&fbdo, base + "/phoneLux", phoneLux);
+  Firebase.RTDB.setBool(&fbdo, base + "/phonePlaced", phonePlaced);
+  Firebase.RTDB.setBool(&fbdo, base + "/handDetected", handDetected);
+  Firebase.RTDB.setInt(&fbdo, base + "/remainingSec", remainingSec);
+  Firebase.RTDB.setInt(&fbdo, base + "/currentMode", currentMode);
+  Firebase.RTDB.setInt(&fbdo, base + "/durationSec", durationSec);
+  
+  String stateStr = "IDLE";
+  if (currentState == STATE_COUNTDOWN_PREPARE) stateStr = "PREPARE";
+  else if (currentState == STATE_RUNNING) stateStr = "RUNNING";
+  else if (currentState == STATE_CONFIRM_CANCEL) stateStr = "CONFIRM_CANCEL";
+  else if (currentState == STATE_FINISHED) stateStr = "FINISHED";
+  
+  Firebase.RTDB.setString(&fbdo, base + "/state", stateStr);
+}
+
+void logDistractionEvent(String reason) {
+  unsigned long long epochMs = getEpochTimeMs();
+  String path = "/logs/" + String((unsigned long)(epochMs / 1000));
+  
+  Firebase.RTDB.setString(&fbdo, path + "/event", reason);
+  Firebase.RTDB.setInt(&fbdo, path + "/mode", currentMode);
+  Firebase.RTDB.setInt(&fbdo, path + "/remainingSec", remainingSec);
+  Firebase.RTDB.setDouble(&fbdo, path + "/timestamp", (double)epochMs);
+}
+
+void logSessionCompleted() {
+  unsigned long long epochMs = getEpochTimeMs();
+  String path = "/sessions/" + String((unsigned long)(epochMs / 1000));
+  
+  Firebase.RTDB.setInt(&fbdo, path + "/mode", currentMode);
+  Firebase.RTDB.setInt(&fbdo, path + "/durationSec", durationSec);
+  Firebase.RTDB.setBool(&fbdo, path + "/completed", true);
+  Firebase.RTDB.setDouble(&fbdo, path + "/timestamp", (double)epochMs);
 }
 
 void setup() {
   Serial.begin(115200);
-  pinMode(PIN_BUTTON, INPUT_PULLUP);
-  pinMode(PIN_LED_STATUS, OUTPUT);
-  pinMode(PIN_BUZZER, OUTPUT);
-  pinMode(PIN_TRIG, OUTPUT);
-  pinMode(PIN_ECHO, INPUT);
+  
+  pinMode(BTN_RED_PIN, INPUT_PULLUP);
+  pinMode(BTN_YELLOW_PIN, INPUT_PULLUP);
+  pinMode(BTN_BLUE_PIN, INPUT_PULLUP);
+  pinMode(BTN_GREEN_PIN, INPUT_PULLUP);
+  pinMode(IR_PIN, INPUT);
+  pinMode(2, OUTPUT); // พิน Buzzer
 
-  // 1. เชื่อมต่อ WiFi
+  // เริ่มต้น I2C สองบัสแยกกันอย่างอิสระ
+  I2C_Main.begin(21, 22); // SDA=D21, SCL=D22 (จอหลัก + เซนเซอร์ BH1750 ทั้งสองตัว)
+  I2C_Sub.begin(23, 18);  // SDA=D23, SCL=D18 (จอรอง 0.91" แยกเด็ดขาด)
+
+  dht.begin();
+
+  bh1750_room.begin(BH1750_TO_GROUND, &I2C_Main); 
+  bh1750_phone.begin(BH1750_TO_VCC, &I2C_Main);    
+
+  // เปิดใช้งานหน้าจอบนบัสของตัวเอง
+  displayMain.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  displaySub.begin(SSD1306_SWITCHCAPVCC, 0x3C); 
+
+  displayMain.clearDisplay();
+  displayMain.setTextColor(WHITE);
+  displayMain.setTextSize(1);
+  displayMain.setCursor(0, 0);
+  displayMain.println("Connecting WiFi...");
+  displayMain.println(WIFI_SSID);
+  displayMain.display();
+
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  Serial.print("Connecting to Wi-Fi");
-  while (WiFi.status() != WL_CONNECTED) {
+  int retryCount = 0;
+  while (WiFi.status() != WL_CONNECTED && retryCount < 20) {
+    delay(500);
     Serial.print(".");
-    delay(300);
+    retryCount++;
   }
-  Serial.println("\nConnected to Wi-Fi! IP: " + WiFi.localIP().toString());
 
-  // 2. ตั้งค่า Firebase
+  if (WiFi.status() != WL_CONNECTED) {
+    displayMain.clearDisplay();
+    displayMain.setCursor(0, 0);
+    displayMain.println("WiFi Conn Failed!");
+    displayMain.display();
+    while(1);
+  }
+
+  configTime(7 * 3600, 0, ntpServer);
+
   config.api_key = API_KEY;
   config.database_url = DATABASE_URL;
-
-  // Sign up anon or email
-  if (Firebase.signUp(&config, &auth, "", "")) {
-    Serial.println("Firebase Auth OK");
-  } else {
-    Serial.printf("Firebase Auth Error: %s\n", config.signer.signupError.message.c_str());
-  }
-
-  config.token_status_callback = tokenStatusCallback;
+  auth.user.email = USER_EMAIL;
+  auth.user.password = USER_PASSWORD;
   Firebase.begin(&config, &auth);
   Firebase.reconnectWiFi(true);
 
-  Serial.println("FocusDock Ready!");
+  displayMain.clearDisplay();
+  displayMain.setCursor(0, 10);
+  displayMain.println("System Ready!");
+  displayMain.display();
+
+  playBuzzerBeep(1000, 200);
+  delay(1000);
 }
 
 void loop() {
-  if (!Firebase.ready()) return;
+  unsigned long currentMillis = millis();
 
-  // ----------------------------------------------------
-  // A. ตรวจจับการกดปุ่มที่ตัวเครื่อง (Physical Button)
-  // ----------------------------------------------------
-  int reading = digitalRead(PIN_BUTTON);
-  if (reading != lastButtonState) {
-    lastDebounceTime = millis();
-  }
+  // 1. อ่านค่าเซนเซอร์
+  bh1750_room.start();
+  bh1750_phone.start();
+  roomLux = bh1750_room.getLux();   
+  phoneLux = bh1750_phone.getLux(); 
+  
+  temp = dht.readTemperature();
+  hum = dht.readHumidity();
+  handDetected = (digitalRead(IR_PIN) == LOW); 
+  phonePlaced = (phoneLux < 15.0);               
 
-  if ((millis() - lastDebounceTime) > debounceDelay) {
-    if (reading == LOW) { // กดปุ่ม
-      Serial.println("Physical button pressed on device!");
-      digitalWrite(PIN_LED_STATUS, HIGH);
-
-      // ส่งสัญญาณไปที่ Firebase เพื่อเริ่ม/สลับการทำงาน
-      String statePath = "devices/" + String(DEVICE_ID) + "/state";
-      FirebaseJson json;
-      json.set("command", "START_TOGGLE");
-      json.set("lastActionBy", "hardware");
-      json.set("actionTimestamp", (double)millis());
-      Firebase.RTDB.updateNode(&fbdo, statePath.c_str(), &json);
-
-      delay(300); // ป้องกันการกดย้ำ
-      digitalWrite(PIN_LED_STATUS, LOW);
+  // 2. แจ้งเตือน Instant Alert เมื่อหลุดโฟกัส
+  if (currentState == STATE_RUNNING) {
+    if (handDetected || !phonePlaced) {
+      if (currentMillis - lastDistractionAlertMillis >= DISTRACTION_COOLDOWN) {
+        lastDistractionAlertMillis = currentMillis;
+        playAlertSound(); 
+        logDistractionEvent(handDetected ? "hand_detected" : "phone_removed");
+      }
     }
   }
-  lastButtonState = reading;
 
-  // ----------------------------------------------------
-  // B. ตรวจจับเซนเซอร์วางมือถือ (Phone Sensor)
-  // ----------------------------------------------------
-  float distance = checkDistance();
-  bool currentPhonePlaced = (distance < DISTANCE_THRESHOLD_CM);
-
-  // ตรวจจับเมื่อสถานะเปลี่ยน (หยิบขึ้น หรือ วางลง)
-  if (currentPhonePlaced != lastPhoneState) {
-    lastPhoneState = currentPhonePlaced;
-    bool isPickedUp = !currentPhonePlaced;
-
-    Serial.println(isPickedUp ? "⚠️ โทรศัพท์ถูกยกขึ้น!" : "📱 วางโทรศัพท์ลงบนแท่นแล้ว");
-
-    // แจ้งเตือนด้วยเสียงสั้นๆ
-    if (isPickedUp) {
-      digitalWrite(PIN_BUZZER, HIGH);
-      delay(80);
-      digitalWrite(PIN_BUZZER, LOW);
+  // 3. ระบบจัดการปุ่มกดบนตัวเครื่อง (Physical Buttons)
+  
+  // 🔴 ปุ่มสีแดง (Power / Cancel) - [TX2 / GPIO17]
+  if (digitalRead(BTN_RED_PIN) == LOW) {
+    if (redPressTime == 0) {
+      redPressTime = currentMillis;
+      redHandled = false;
     }
-
-    // อัปเดตสถานะไปที่ Firebase Realtime Database
-    String statePath = "devices/" + String(DEVICE_ID) + "/state";
-    FirebaseJson json;
-    json.set("phonePickedUp", isPickedUp);
-    json.set("lastStateChange", (double)millis());
-    json.set("source", "hardware_sensor");
-    Firebase.RTDB.updateNode(&fbdo, statePath.c_str(), &json);
+    if (!redHandled && (currentMillis - redPressTime >= 2000)) {
+      redHandled = true;
+      enterDeepSleep();
+    }
+  } else if (redPressTime > 0) {
+    if (!redHandled && (currentMillis - redPressTime < 2000)) {
+      if (currentState == STATE_RUNNING) {
+        currentState = STATE_CONFIRM_CANCEL;
+        cancelConfirmStart = currentMillis;
+        playBuzzerBeep(800, 100);
+      } else if (currentState == STATE_CONFIRM_CANCEL) {
+        currentState = STATE_IDLE;
+        remainingSec = durationSec;
+        playBuzzerBeep(500, 300);
+        updateFirebaseLiveStatus();
+      }
+    }
+    redPressTime = 0;
+    redHandled = false;
   }
 
-  // ----------------------------------------------------
-  // C. เช็คคำสั่งจากหน้าเว็บ (Web Command Listener)
-  // ----------------------------------------------------
-  static unsigned long lastCheckWebTime = 0;
-  if (millis() - lastCheckWebTime > 1500) { // ตรวจสอบทุกๆ 1.5 วินาที
-    lastCheckWebTime = millis();
+  // 🟡 ปุ่มสีเหลือง (Mode Switch) - [D15]
+  static bool lastYellow = HIGH;
+  bool currentYellow = digitalRead(BTN_YELLOW_PIN);
+  if (lastYellow == HIGH && currentYellow == LOW) {
+    if (currentState == STATE_IDLE) {
+      currentMode = (currentMode == 1) ? 2 : 1;
+      playBuzzerBeep(1200, 100);
+      updateFirebaseLiveStatus();
+    }
+  }
+  lastYellow = currentYellow;
 
-    String cmdPath = "devices/" + String(DEVICE_ID) + "/command";
-    if (Firebase.RTDB.getJSON(&fbdo, cmdPath.c_str())) {
-      FirebaseJson &cmdJson = fbdo.jsonObject();
-      FirebaseJsonData actionData;
-      cmdJson.get(actionData, "action");
+  // 🔵 ปุ่มสีฟ้า (Time Adjust) - [D5] (กดสั้น +5 นาที / กดค้าง 1.5 วินาที -5 นาที)
+  if (digitalRead(BTN_BLUE_PIN) == LOW) {
+    if (bluePressTime == 0) {
+      bluePressTime = currentMillis;
+      blueLongBeepPlayed = false;
+    }
+    if (!blueLongBeepPlayed && (currentMillis - bluePressTime >= 1500)) {
+      blueLongBeepPlayed = true;
+      if (currentState == STATE_IDLE) {
+        if (durationSec > 600) {
+          durationSec -= 300; 
+        } else {
+          durationSec = 600;  
+        }
+        playBuzzerBeep(600, 200); 
+        updateFirebaseLiveStatus();
+      }
+    }
+  } else if (bluePressTime > 0) {
+    if (!blueLongBeepPlayed && (currentMillis - bluePressTime < 1500)) {
+      if (currentState == STATE_IDLE) {
+        durationSec += 300; 
+        if (durationSec > 5400) durationSec = 600; 
+        playBuzzerBeep(1500, 100); 
+        updateFirebaseLiveStatus();
+      }
+    }
+    bluePressTime = 0;
+    blueLongBeepPlayed = false;
+  }
 
-      if (actionData.success) {
-        String action = actionData.stringValue;
-        Serial.println("Received Command from Web: " + action);
-        // สามารถนำไปสั่งไฟ LED หรือเริ่มนับเวลาที่ตัวเครื่องได้
+  // 🟢 ปุ่มสีเขียว (Start / Repeat) - [RX2 / GPIO16]
+  static bool lastGreen = HIGH;
+  bool currentGreen = digitalRead(BTN_GREEN_PIN);
+  if (lastGreen == HIGH && currentGreen == LOW) {
+    if (currentState == STATE_IDLE || currentState == STATE_FINISHED) {
+      if (phonePlaced) {
+        prepareSec = 3; 
+        isWebStart = false;
+        currentState = STATE_COUNTDOWN_PREPARE;
+        playBuzzerBeep(1800, 150);
+        updateFirebaseLiveStatus();
+      } else {
+        playAlertSound();
+      }
+    }
+  }
+  lastGreen = currentGreen;
+
+  // 4. ซิงก์ข้อมูล Firebase (ทุก 2 วิ) รองรับสั่งงานผ่านเว็บ
+  if (currentMillis - firebaseSyncMillis >= 2000) {
+    firebaseSyncMillis = currentMillis;
+    updateFirebaseLiveStatus();
+
+    // ก. รับการตั้งค่าโหมดและเวลาจากเว็บ
+    if (currentState == STATE_IDLE) {
+      if (Firebase.RTDB.getInt(&fbdo, "/config/mode")) {
+        int webMode = fbdo.intData();
+        if (webMode == 1 || webMode == 2) currentMode = webMode;
+      }
+      if (Firebase.RTDB.getInt(&fbdo, "/config/durationSec")) {
+        int webDuration = fbdo.intData();
+        if (webDuration >= 600 && webDuration <= 5400) durationSec = webDuration;
       }
     }
 
-    // อ่านค่าการตั้งค่าเวลาจากหน้าเว็บ
-    String settingsPath = "devices/" + String(DEVICE_ID) + "/settings";
-    if (Firebase.RTDB.getJSON(&fbdo, settingsPath.c_str())) {
-      FirebaseJson &setJson = fbdo.jsonObject();
-      FirebaseJsonData sM, bM, dM;
-      if (setJson.get(sM, "studyMinutes")) studyMinutes = sM.intValue;
-      if (setJson.get(bM, "breakMinutes")) breakMinutes = bM.intValue;
-      if (setJson.get(dM, "detoxMinutes")) detoxMinutes = dM.intValue;
+    // ข. รับคำสั่งเริ่มจับเวลาจากเว็บ
+    if (Firebase.RTDB.getBool(&fbdo, "/config/trigger")) {
+      bool webTrigger = fbdo.boolData();
+      if (webTrigger && (currentState == STATE_IDLE || currentState == STATE_FINISHED)) {
+        Firebase.RTDB.setBool(&fbdo, "/config/trigger", false);
+        prepareSec = 15; 
+        isWebStart = true;
+        currentState = STATE_COUNTDOWN_PREPARE;
+        playBuzzerBeep(1800, 200);
+        updateFirebaseLiveStatus();
+      }
+    }
+
+    // ค. รับคำสั่งยกเลิก/รีเซ็ตจากเว็บ
+    if (Firebase.RTDB.getBool(&fbdo, "/config/cancel")) {
+      bool webCancel = fbdo.boolData();
+      if (webCancel) {
+        Firebase.RTDB.setBool(&fbdo, "/config/cancel", false);
+        if (currentState != STATE_IDLE) {
+          currentState = STATE_IDLE;
+          remainingSec = durationSec;
+          playBuzzerBeep(500, 300);
+          updateFirebaseLiveStatus();
+        }
+      }
     }
   }
 
-  delay(50);
+  // 5. Timer Loop (1 วินาที)
+  if (currentMillis - lastTimerMillis >= 1000) {
+    lastTimerMillis = currentMillis;
+
+    if (currentState == STATE_COUNTDOWN_PREPARE) {
+      if (prepareSec > 0) {
+        prepareSec--;
+      } else {
+        remainingSec = durationSec;
+        currentState = STATE_RUNNING;
+        playBuzzerBeep(2000, 300);
+        updateFirebaseLiveStatus();
+      }
+    }
+    else if (currentState == STATE_RUNNING) {
+      if (remainingSec > 0) {
+        remainingSec--; 
+      } else {
+        currentState = STATE_FINISHED;
+        playAlertSound();
+        logSessionCompleted();
+        updateFirebaseLiveStatus();
+      }
+    }
+    else if (currentState == STATE_CONFIRM_CANCEL) {
+      if (currentMillis - cancelConfirmStart >= 5000) {
+        currentState = STATE_RUNNING;
+        updateFirebaseLiveStatus();
+      }
+    }
+  }
+
+  // 6. อัปเดตการแสดงผลจอ OLED แยกบัสอิสระ
+  
+  // จอหลัก 0.96" (บัส I2C_Main: D21, D22)
+  displayMain.clearDisplay();
+  displayMain.setTextColor(WHITE);
+  
+  if (currentState == STATE_IDLE) {
+    displayMain.setTextSize(1);
+    displayMain.setCursor(0, 0);
+    displayMain.printf("MODE: %s\n", (currentMode == 1 ? "STUDY" : "DETOX"));
+    displayMain.setTextSize(2);
+    displayMain.setCursor(15, 20);
+    displayMain.printf("%02d:00 MIN", durationSec / 60);
+    displayMain.setTextSize(1);
+    displayMain.setCursor(0, 50);
+    displayMain.print(phonePlaced ? "Status: Phone Ready" : "WARN: Place Phone!");
+  } 
+  else if (currentState == STATE_COUNTDOWN_PREPARE) {
+    displayMain.setTextSize(1);
+    displayMain.setCursor(0, 0);
+    displayMain.print(isWebStart ? "WEB START (15s PREP)" : "GET READY (3s)!");
+    displayMain.setTextSize(3);
+    displayMain.setCursor(50, 25);
+    displayMain.printf("%02d", prepareSec);
+  } 
+  else if (currentState == STATE_RUNNING) {
+    int m = remainingSec / 60;
+    int s = remainingSec % 60;
+    displayMain.setTextSize(1);
+    displayMain.setCursor(0, 0);
+    displayMain.printf("RUNNING [%s]\n", (currentMode == 1 ? "STUDY" : "DETOX"));
+    displayMain.setTextSize(3);
+    displayMain.setCursor(18, 20);
+    displayMain.printf("%02d:%02d", m, s);
+  } 
+  else if (currentState == STATE_CONFIRM_CANCEL) {
+    displayMain.setTextSize(1);
+    displayMain.setCursor(0, 10);
+    displayMain.println("CANCEL TIMER?");
+    displayMain.println("Press RED to Confirm");
+    displayMain.printf("Auto Resume in %ds...", 5 - (int)((currentMillis - cancelConfirmStart) / 1000));
+  }
+  else if (currentState == STATE_FINISHED) {
+    displayMain.setTextSize(2);
+    displayMain.setCursor(10, 15);
+    displayMain.println("TIME'S UP!");
+    displayMain.setTextSize(1);
+    displayMain.setCursor(0, 45);
+    displayMain.println("Press GREEN to Repeat");
+  }
+  displayMain.display();
+
+  // จอรอง 0.91" (บัส I2C_Sub: D23, D18)
+  displaySub.clearDisplay();
+  displaySub.setTextSize(1);
+  displaySub.setTextColor(WHITE);
+  displaySub.setCursor(0, 0);
+  
+  displaySub.printf("Temp:%.1fC  Hum:%.0f%%\n", isnan(temp) ? 0 : temp, isnan(hum) ? 0 : hum);
+  displaySub.printf("Room Lux: %.0f lx\n", roomLux);
+  
+  if (roomLux >= 300) {
+    displaySub.println("Light: GOOD (Ready)");
+  } else if (roomLux >= 100) {
+    displaySub.println("Light: MODERATE");
+  } else {
+    displaySub.println("Light: TOO DARK!");
+  }
+  
+  displaySub.display();
 }

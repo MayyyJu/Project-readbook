@@ -12,6 +12,7 @@
 
   <!-- Firebase Compat CDN (Works out of the box without build step) -->
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 
   <link rel="stylesheet" href="./styles.css">
@@ -106,6 +107,44 @@
             <div class="pickup-today-bar">
               <span>หยิบมือถือวันนี้: <span class="highlight-count" id="todayPickupsCount">0</span> ครั้ง</span>
               <span>รวมเวลาจับ: <span class="highlight-count" id="todayPickupDuration">0 นาที</span></span>
+            </div>
+          </div>
+
+          <!-- REAL-TIME HARDWARE SENSOR DASHBOARD (OLED Sub Display Mirror) -->
+          <div class="env-sensor-card" id="envSensorCard">
+            <div class="env-sensor-header">
+              <span class="env-title">🌿 เซนเซอร์สภาพแวดล้อม (จาก ESP32)</span>
+              <span class="env-badge" id="envStatusBadge">ออนไลน์ 🟢</span>
+            </div>
+            <div class="env-sensor-grid">
+              <div class="env-item">
+                <span class="env-item-icon">🌡️</span>
+                <div class="env-item-info">
+                  <span class="env-item-label">อุณหภูมิ</span>
+                  <span class="env-item-val" id="envTemp">-- °C</span>
+                </div>
+              </div>
+              <div class="env-item">
+                <span class="env-item-icon">💧</span>
+                <div class="env-item-info">
+                  <span class="env-item-label">ความชื้น</span>
+                  <span class="env-item-val" id="envHum">-- %</span>
+                </div>
+              </div>
+              <div class="env-item">
+                <span class="env-item-icon">💡</span>
+                <div class="env-item-info">
+                  <span class="env-item-label">แสงห้อง</span>
+                  <span class="env-item-val" id="envRoomLux">-- lx</span>
+                </div>
+              </div>
+              <div class="env-item">
+                <span class="env-item-icon">✋</span>
+                <div class="env-item-info">
+                  <span class="env-item-label">เซนเซอร์มือ</span>
+                  <span class="env-item-val" id="envHandStatus">ปกติ</span>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -280,50 +319,22 @@
             <p style="font-size: 12px; color: var(--text-secondary);">สั่งงานบอร์ด ESP32 โดยตรง และเก็บข้อมูลลง Firebase</p>
           </div>
 
-          <!-- DIRECT ESP32 CONNECTION CARD -->
+          <!-- TWO-WAY CONTROL OVERVIEW CARD -->
           <div class="settings-section-card direct-connect-card">
             <div class="settings-card-title">
               <span>⚡</span>
-              <span>สั่งงานตรงไปยังบอร์ด ESP32</span>
+              <span>การสั่งงานสองทาง (ฮาร์ดแวร์ & เว็บ)</span>
             </div>
-            <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 14px; line-height: 1.5;">
-              เชื่อมต่อตรงเพื่อสั่ง เริ่ม/พัก/รีเซ็ต และรับสัญญาณยกมือถือจากบอร์ดทันที ไม่ต้องผ่านคลาวด์
+            <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 12px; line-height: 1.6;">
+              ระบบรองรับการกดปุ่มสั่งงานได้ทั้งจาก <strong>ปุ่มกดบนตัวเครื่อง ESP32</strong> และ <strong>ปุ่มบนหน้าเว็บ</strong> โดยข้อมูลจะซิงก์ตรงกันแบบ Realtime ทันที:
             </p>
 
-            <!-- Option 1: Web Bluetooth (BLE) -->
-            <div class="direct-connect-box">
-              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 6px;">
-                <div style="display:flex; align-items:center; gap:6px;">
-                  <span style="font-size: 16px;">📶</span>
-                  <strong style="font-size: 13px;">เชื่อมต่อผ่าน Bluetooth (BLE)</strong>
-                </div>
-                <span class="ble-status-pill" id="bleStatusBadge">ไม่ได้เชื่อมต่อ</span>
-              </div>
-              <p style="font-size: 11px; color: var(--text-muted); margin-bottom: 10px;">
-                สั่งงานตรงผ่านบลูทูธ ไม่ดีเลย์ รองรับมือถือและคอมพิวเตอร์
-              </p>
-              <button class="btn-direct-connect" id="btnConnectBle">
-                <span id="btnConnectBleIcon">🔵</span>
-                <span id="btnConnectBleText">ค้นหาและเชื่อมต่อกับ ESP32</span>
-              </button>
-            </div>
-
-            <!-- Option 2: Direct WiFi IP -->
-            <div class="direct-connect-box" style="margin-top: 12px;">
-              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 6px;">
-                <div style="display:flex; align-items:center; gap:6px;">
-                  <span style="font-size: 16px;">🌐</span>
-                  <strong style="font-size: 13px;">หรือสั่งงานผ่าน IP WiFi ตรง</strong>
-                </div>
-                <span class="ble-status-pill" id="ipStatusBadge">ไม่ได้เชื่อมต่อ</span>
-              </div>
-              <div class="setting-input-wrapper" style="margin-bottom: 8px;">
-                <input type="text" id="cfgEsp32Ip" class="setting-input" placeholder="เช่น 192.168.1.50">
-              </div>
-              <button class="btn-direct-connect secondary" id="btnTestEsp32Ip">
-                <span>🔗</span>
-                <span>บันทึกและเชื่อมต่อผ่าน IP</span>
-              </button>
+            <div style="font-size: 11px; color: var(--text-secondary); line-height: 1.8; background: var(--bg-app); padding: 10px 12px; border-radius: var(--radius-md); border: 1px solid var(--border-light);">
+              <div>🟢 <strong>ปุ่มเขียว (RX2):</strong> กดเพื่อเริ่มนับเวลา (Start) หรือเริ่มใหม่ (Repeat)</div>
+              <div>🔴 <strong>ปุ่มแดง (TX2):</strong> กดสั้นเพื่อขอยกเลิก (Cancel) / กดค้าง 2 วิ เพื่อปิดเครื่อง (Deep Sleep)</div>
+              <div>🟡 <strong>ปุ่มเหลือง (D15):</strong> กดเพื่อสลับโหมด อ่านหนังสือ (Study) ↔ พักมือถือ (Detox)</div>
+              <div>🔵 <strong>ปุ่มฟ้า (D5):</strong> กดสั้นเพื่อเพิ่ม +5 นาที / กดค้าง 1.5 วิ เพื่อลด -5 นาที</div>
+              <div>🌐 <strong>ปุ่มบนหน้าเว็บ:</strong> กด "เริ่มจับเวลา" หรือ "ยกเลิก/รีเซ็ต" ได้ทันทีเช่นกัน</div>
             </div>
           </div>
 
@@ -375,42 +386,28 @@
           <div class="settings-section-card">
             <div class="settings-card-title">
               <span>🔥</span>
-              <span>การตั้งค่าเชื่อมต่อ Firebase</span>
+              <span>สถานะเชื่อมต่อ Firebase Realtime Database</span>
             </div>
             <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 12px;">
-              กรอกข้อมูลโปรเจกต์ Firebase Realtime Database ของคุณเพื่อเชื่อมกับบอร์ด ESP32 / Arduino
+              เชื่อมต่อกับฐานข้อมูลสำหรับ ESP32 เรียบร้อยแล้ว (ซิงก์ข้อมูล /status, /config, /logs, /sessions อัตโนมัติ)
             </p>
 
             <div class="setting-row">
               <label class="setting-label" for="cfgDatabaseUrl">Database URL</label>
               <div class="setting-input-wrapper">
-                <input type="text" id="cfgDatabaseUrl" class="setting-input" placeholder="https://your-app-default-rtdb.firebaseio.com">
+                <input type="text" id="cfgDatabaseUrl" class="setting-input" value="https://readbook-may-default-rtdb.asia-southeast1.firebasedatabase.app/" readonly>
               </div>
             </div>
 
             <div class="setting-row">
-              <label class="setting-label" for="cfgApiKey">API Key</label>
+              <label class="setting-label" for="cfgUserEmail">Auth Email</label>
               <div class="setting-input-wrapper">
-                <input type="password" id="cfgApiKey" class="setting-input" placeholder="AIzaSy...">
+                <input type="text" id="cfgUserEmail" class="setting-input" value="test0readbook@timer.com" readonly>
               </div>
             </div>
 
-            <div class="setting-row">
-              <label class="setting-label" for="cfgProjectId">Project ID</label>
-              <div class="setting-input-wrapper">
-                <input type="text" id="cfgProjectId" class="setting-input" placeholder="your-project-id">
-              </div>
-            </div>
-
-            <div class="setting-row">
-              <label class="setting-label" for="cfgDeviceNode">Device ID (Node Key)</label>
-              <div class="setting-input-wrapper">
-                <input type="text" id="cfgDeviceNode" class="setting-input" value="focus_dock_01">
-              </div>
-            </div>
-
-            <button class="btn-save-full" id="btnSaveFirebaseConfig" style="background: #E65100;">
-              🔗 เชื่อมต่อกับ Firebase
+            <button class="btn-save-full" id="btnSaveFirebaseConfig" style="background: var(--sage-main);">
+              🔄 ตรวจสอบการเชื่อมต่อใหม่ (Reconnect)
             </button>
           </div>
 

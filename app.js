@@ -219,6 +219,14 @@ class FocusDockApp {
     this.cfgDeviceNode = document.getElementById('cfgDeviceNode');
     this.btnSaveFirebaseConfig = document.getElementById('btnSaveFirebaseConfig');
 
+    // Ambient Environment Sensors (from ESP32)
+    this.envSensorCard = document.getElementById('envSensorCard');
+    this.envStatusBadge = document.getElementById('envStatusBadge');
+    this.envTemp = document.getElementById('envTemp');
+    this.envHum = document.getElementById('envHum');
+    this.envRoomLux = document.getElementById('envRoomLux');
+    this.envHandStatus = document.getElementById('envHandStatus');
+
     // Direct ESP32 Connection elements
     this.btnConnectBle = document.getElementById('btnConnectBle');
     this.btnConnectBleIcon = document.getElementById('btnConnectBleIcon');
@@ -335,31 +343,26 @@ class FocusDockApp {
       this.playSound('click');
     });
 
-    // Save Firebase Credentials
-    this.btnSaveFirebaseConfig.addEventListener('click', async () => {
-      const config = {
-        databaseURL: this.cfgDatabaseUrl.value.trim(),
-        apiKey: this.cfgApiKey.value.trim(),
-        projectId: this.cfgProjectId.value.trim(),
-        deviceNodeId: this.cfgDeviceNode.value.trim() || 'focus_dock_01'
-      };
-      window.focusDockFirebase.saveConfig(config);
-      this.showToast('กำลังเชื่อมต่อ Firebase...');
-
-      const success = await window.focusDockFirebase.initializeFirebase((state) => {
-        this.onHardwareStateReceived(state);
+    // Reconnect Firebase Button
+    if (this.btnSaveFirebaseConfig) {
+      this.btnSaveFirebaseConfig.addEventListener('click', async () => {
+        this.showToast('กำลังเชื่อมต่อ Firebase...');
+        const success = await window.focusDockFirebase.initializeFirebase(
+          (status) => this.onHardwareStatusReceived(status),
+          (logs) => this.onHardwareLogsReceived(logs),
+          (sessions) => this.onHardwareSessionsReceived(sessions)
+        );
+        if (success) {
+          this.statusDot.className = 'status-dot online';
+          this.statusLabel.textContent = 'ออนไลน์';
+          this.showToast('🔥 เชื่อมต่อ Firebase สำเร็จแล้ว!');
+        } else {
+          this.statusDot.className = 'status-dot offline';
+          this.statusLabel.textContent = 'ออฟไลน์';
+          this.showToast('ไม่สามารถเชื่อมต่อได้ ตรวจสอบอินเทอร์เน็ต');
+        }
       });
-
-      if (success) {
-        this.statusDot.className = 'status-dot online';
-        this.statusLabel.textContent = 'ออนไลน์';
-        this.showToast('🔥 เชื่อมต่อ Firebase สำเร็จแล้ว!');
-      } else {
-        this.statusDot.className = 'status-dot demo';
-        this.statusLabel.textContent = 'โหมดจำลอง';
-        this.showToast('ไม่สามารถเชื่อมต่อได้ ทำงานในโหมดจำลอง');
-      }
-    });
+    }
 
     // Direct BLE Connect Button
     if (this.btnConnectBle) {
@@ -442,50 +445,160 @@ class FocusDockApp {
     }
   }
 
-  // Setup Firebase Realtime Listener
+  // Setup Firebase Realtime Listener with ESP32
   setupFirebaseListener() {
     window.focusDockFirebase.onConnectionChange((connected) => {
       if (connected) {
         this.statusDot.className = 'status-dot online';
         this.statusLabel.textContent = 'ออนไลน์';
-      } else if (!window.focusDockFirebase.isDemoMode) {
+        if (this.envStatusBadge) {
+          this.envStatusBadge.textContent = 'ออนไลน์ 🟢';
+          this.envStatusBadge.style.color = 'var(--sage-main)';
+        }
+      } else {
         this.statusDot.className = 'status-dot offline';
-        this.statusLabel.textContent = 'หลุดการเชื่อมต่อ';
+        this.statusLabel.textContent = 'ออฟไลน์';
+        if (this.envStatusBadge) {
+          this.envStatusBadge.textContent = 'ออฟไลน์ 🔴';
+          this.envStatusBadge.style.color = 'var(--alert-peach)';
+        }
       }
     });
 
-    // Try auto-connect if credentials exist
-    if (window.focusDockFirebase.config.databaseURL) {
-      window.focusDockFirebase.initializeFirebase((state) => {
-        this.onHardwareStateReceived(state);
-      });
-    }
+    // Auto-connect to Firebase with ESP32 handlers
+    window.focusDockFirebase.initializeFirebase(
+      (status) => this.onHardwareStatusReceived(status),
+      (logs) => this.onHardwareLogsReceived(logs),
+      (sessions) => this.onHardwareSessionsReceived(sessions)
+    );
   }
 
-  // State received from ESP32 / Arduino hardware via Firebase
-  onHardwareStateReceived(remoteState) {
-    if (!remoteState) return;
+  // Receive live sensor readings and state from ESP32 via /status
+  onHardwareStatusReceived(remoteStatus) {
+    if (!remoteStatus) return;
 
-    // 1. Phone sensor status change
-    if (typeof remoteState.phonePickedUp === 'boolean' && remoteState.phonePickedUp !== this.isPhonePickedUp) {
-      this.handlePhonePickupStateChange(remoteState.phonePickedUp, 'hardware');
+    // 1. Environmental Sensors (DHT11 & BH1750 Room Lux)
+    if (this.envTemp && remoteStatus.temp !== undefined) {
+      this.envTemp.textContent = `${Number(remoteStatus.temp).toFixed(1)} °C`;
+    }
+    if (this.envHum && remoteStatus.hum !== undefined) {
+      this.envHum.textContent = `${Number(remoteStatus.hum).toFixed(0)} %`;
+    }
+    if (this.envRoomLux && remoteStatus.roomLux !== undefined) {
+      this.envRoomLux.textContent = `${Math.round(remoteStatus.roomLux)} lx`;
+    }
+    if (this.envHandStatus && remoteStatus.handDetected !== undefined) {
+      this.envHandStatus.textContent = remoteStatus.handDetected ? '⚠️ ตรวจพบมือ' : 'ปกติ';
+      if (remoteStatus.handDetected && this.timerStatus === 'running') {
+        this.showToast('✋ ตรวจพบมือใกล้แท่นวาง (เสียสมาธิ)');
+      }
     }
 
-    // 2. Physical Button press received from Hardware
-    if (remoteState.lastActionBy === 'hardware' && remoteState.actionTimestamp) {
-      const timeDiff = Date.now() - remoteState.actionTimestamp;
-      if (timeDiff < 3000) {
-        if (remoteState.command === 'START_TOGGLE') {
-          this.handleHardwarePhysicalButtonPress();
+    // 2. Phone Placement Sensor (BH1750 Phone Lux on Dock)
+    if (typeof remoteStatus.phonePlaced === 'boolean') {
+      const isPickedUp = !remoteStatus.phonePlaced;
+      if (isPickedUp !== this.isPhonePickedUp) {
+        this.handlePhonePickupStateChange(isPickedUp, 'hardware');
+      }
+    }
+
+    // 3. Mode Sync from physical Yellow button (Mode 1 = Study, Mode 2 = Detox)
+    if (remoteStatus.currentMode) {
+      const modeName = remoteStatus.currentMode === 2 ? 'detox' : 'study';
+      if (this.activeMode !== modeName && this.timerStatus === 'idle') {
+        this.switchModeUI(modeName);
+      }
+    }
+
+    // 4. Timer State Sync from ESP32 ("IDLE", "PREPARE", "RUNNING", "CONFIRM_CANCEL", "FINISHED")
+    if (remoteStatus.state) {
+      if (remoteStatus.state === 'RUNNING') {
+        this.timerStatus = 'running';
+        if (remoteStatus.remainingSec !== undefined) {
+          this.remainingSeconds = remoteStatus.remainingSec;
+        }
+        if (remoteStatus.durationSec) {
+          this.totalPhaseSeconds = remoteStatus.durationSec;
+        }
+        this.btnMainActionIcon.textContent = '⏹';
+        this.btnMainActionText.textContent = 'ยกเลิก / รีเซ็ต';
+        this.btnMainAction.classList.add('running');
+        this.timerCaption.textContent = this.activeMode === 'study' ? 'กำลังอ่านหนังสือ มีสมาธิเต็มที่' : 'กำลังพักจากมือถือ ห้ามหยิบใช้งาน';
+        this.updateTimerDisplay();
+      } else if (remoteStatus.state === 'PREPARE') {
+        this.timerStatus = 'prepare';
+        this.btnMainActionIcon.textContent = '⏳';
+        this.btnMainActionText.textContent = 'กำลังเตรียมตัว...';
+        this.timerCaption.textContent = `เตรียมความพร้อม (${remoteStatus.remainingSec || 15} วิ) วางโทรศัพท์บนแท่น`;
+        this.updateTimerDisplay();
+      } else if (remoteStatus.state === 'CONFIRM_CANCEL') {
+        this.showToast('⚠️ รอยืนยันยกเลิกบนเครื่อง (กดปุ่มแดงอีกครั้ง)');
+      } else if (remoteStatus.state === 'FINISHED') {
+        if (this.timerStatus !== 'finished') {
+          this.timerStatus = 'finished';
+          this.playSound('bell');
+          this.showToast('🔔 ครบเวลาแล้ว! สุดยอดมาก');
+          this.btnMainActionIcon.textContent = '▶';
+          this.btnMainActionText.textContent = 'เริ่มใหม่อีกครั้ง';
+          this.btnMainAction.classList.remove('running');
+          this.timerCaption.textContent = 'ภารกิจสำเร็จ!';
+        }
+      } else if (remoteStatus.state === 'IDLE') {
+        if (this.timerStatus !== 'idle') {
+          this.resetTimerUI();
+        } else {
+          if (remoteStatus.durationSec && remoteStatus.durationSec !== this.totalPhaseSeconds) {
+            this.totalPhaseSeconds = remoteStatus.durationSec;
+            this.remainingSeconds = remoteStatus.durationSec;
+            this.updateTimerDisplay();
+          }
         }
       }
     }
   }
 
-  // Physical Button on Hardware Pressed (or simulated)
-  handleHardwarePhysicalButtonPress() {
-    this.showToast('🔘 ได้รับสัญญาณกดปุ่มจากตัวเครื่อง!');
-    this.handleMainAction();
+  // Receive logs from ESP32 via /logs
+  onHardwareLogsReceived(logs) {
+    if (!logs) return;
+    const logList = Object.values(logs);
+    if (!logList.length) return;
+
+    const newPickups = logList
+      .filter((item) => item.event === 'phone_removed' || item.event === 'hand_detected')
+      .map((item, idx) => {
+        const dateObj = new Date(item.timestamp || Date.now());
+        const timeStr = dateObj.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+        return {
+          id: `log_${item.timestamp || idx}`,
+          timestamp: item.timestamp || Date.now(),
+          time: timeStr,
+          durationSec: 15,
+          durationMinutes: 1,
+          mode: item.mode === 2 ? 'detox' : 'study',
+          type: item.event === 'hand_detected' ? 'เอามือไปแตะ' : 'ยกโทรศัพท์ขึ้น'
+        };
+      });
+
+    if (newPickups.length > 0) {
+      const existingIds = new Set(this.pickups.map(p => p.id));
+      const additions = newPickups.filter(p => !existingIds.has(p.id));
+      if (additions.length > 0) {
+        this.pickups = [...additions, ...this.pickups].slice(0, 100);
+        this.saveStoredPickups();
+        this.renderHistory('all');
+        this.renderWeeklyStats();
+        this.updatePickupStatusUI();
+      }
+    }
+  }
+
+  // Receive completed sessions from ESP32 via /sessions
+  onHardwareSessionsReceived(sessions) {
+    if (!sessions) return;
+    const sessionList = Object.values(sessions);
+    if (!sessionList.length) return;
+    this.sessions = sessionList;
+    this.renderWeeklyStats();
   }
 
   // Switch Active Navigation Tab
@@ -503,17 +616,9 @@ class FocusDockApp {
     if (tabId === 'tabStats') this.renderWeeklyStats();
   }
 
-  // Switch Mode: Study vs Detox
-  switchMode(mode) {
-    if (this.timerStatus === 'running') {
-      const confirmChange = confirm('กำลังจับเวลาอยู่ ต้องการเปลี่ยนโหมดและรีเซ็ตเวลาหรือไม่?');
-      if (!confirmChange) return;
-      this.resetTimer();
-    }
-
+  // Switch Mode UI without triggering Firebase loop
+  switchModeUI(mode) {
     this.activeMode = mode;
-    this.playSound('click');
-
     if (mode === 'study') {
       this.modeBtnStudy.classList.add('active');
       this.modeBtnStudy.classList.remove('detox');
@@ -540,71 +645,45 @@ class FocusDockApp {
     this.remainingSeconds = this.totalPhaseSeconds;
     this.updateTimerDisplay();
     this.renderPresets();
-    if (window.esp32Direct) {
-      window.esp32Direct.dispatchDirectCommand('CHANGE_MODE', mode, this.settings);
-    } else if (window.focusDockFirebase) {
-      window.focusDockFirebase.sendCommand('CHANGE_MODE', mode, this.settings);
-    }
   }
 
-  // Main Timer Action (Start / Resume)
+  // Switch Mode from Web (dispatches to ESP32 /config)
+  switchMode(mode) {
+    if (this.timerStatus === 'running') {
+      const confirmChange = confirm('กำลังจับเวลาอยู่ ต้องการเปลี่ยนโหมดและรีเซ็ตเวลาหรือไม่?');
+      if (!confirmChange) return;
+      this.resetTimer();
+    }
+
+    this.playSound('click');
+    this.switchModeUI(mode);
+    const modeNum = mode === 'study' ? 1 : 2;
+    const durationSec = (mode === 'study' ? this.settings.studyMinutes : this.settings.detoxMinutes) * 60;
+    window.focusDockFirebase.updateConfig(modeNum, durationSec);
+  }
+
+  // Main Timer Action (Start / Cancel)
   handleMainAction() {
     this.playSound('click');
-
-    if (this.timerStatus === 'idle' || this.timerStatus === 'paused') {
+    if (this.timerStatus === 'idle' || this.timerStatus === 'finished') {
       this.startTimer();
-    } else if (this.timerStatus === 'running') {
-      this.togglePause();
+    } else {
+      this.resetTimer();
     }
   }
 
   startTimer() {
-    this.timerStatus = 'running';
-    this.btnMainActionIcon.textContent = '⏸';
-    this.btnMainActionText.textContent = 'พักชั่วคราว';
-    this.btnMainAction.classList.add('running');
-    this.btnPauseAction.style.display = 'none';
-
-    if (this.activeMode === 'study') {
-      this.timerCaption.textContent = this.currentPhase === 'study' ? 'กำลังอ่านหนังสือ มีสมาธิเต็มที่' : 'เวลาพักสายตาและผ่อนคลาย';
-    } else {
-      this.timerCaption.textContent = 'กำลังพักจากมือถือ ห้ามหยิบใช้งาน';
-    }
-
-    clearInterval(this.timerInterval);
-    this.timerInterval = setInterval(() => {
-      this.tickTimer();
-    }, 1000);
-
-    this.showToast('▶ เริ่มต้นการจับเวลาแล้ว');
-    if (window.esp32Direct) {
-      window.esp32Direct.dispatchDirectCommand('START', this.activeMode, this.settings);
-    } else if (window.focusDockFirebase) {
-      window.focusDockFirebase.sendCommand('START', this.activeMode, this.settings);
-    }
+    const modeNum = this.activeMode === 'study' ? 1 : 2;
+    const durationSec = (this.activeMode === 'study' ? this.settings.studyMinutes : this.settings.detoxMinutes) * 60;
+    this.showToast('🚀 ส่งคำสั่งเริ่มจับเวลาไปยังเครื่อง ESP32 แล้ว!');
+    window.focusDockFirebase.triggerStart(modeNum, durationSec);
   }
 
   togglePause() {
-    if (this.timerStatus === 'running') {
-      this.timerStatus = 'paused';
-      clearInterval(this.timerInterval);
-      this.btnMainActionIcon.textContent = '▶';
-      this.btnMainActionText.textContent = 'ทำต่อ (Resume)';
-      this.btnMainAction.classList.remove('running');
-      this.timerCaption.textContent = 'พักการจับเวลาชั่วคราว';
-      this.showToast('⏸ หยุดพักชั่วคราว');
-      if (window.esp32Direct) {
-        window.esp32Direct.dispatchDirectCommand('PAUSE', this.activeMode, this.settings);
-      } else if (window.focusDockFirebase) {
-        window.focusDockFirebase.sendCommand('PAUSE', this.activeMode, this.settings);
-      }
-    } else if (this.timerStatus === 'paused') {
-      this.startTimer();
-    }
+    this.resetTimer();
   }
 
-  resetTimer() {
-    this.playSound('click');
+  resetTimerUI() {
     clearInterval(this.timerInterval);
     this.timerStatus = 'idle';
 
@@ -628,12 +707,13 @@ class FocusDockApp {
     this.timerCaption.textContent = 'พร้อมเริ่มจับเวลา';
 
     this.updateTimerDisplay();
-    this.showToast('⏹ รีเซ็ตเวลาเรียบร้อย');
-    if (window.esp32Direct) {
-      window.esp32Direct.dispatchDirectCommand('RESET', this.activeMode, this.settings);
-    } else if (window.focusDockFirebase) {
-      window.focusDockFirebase.sendCommand('RESET', this.activeMode, this.settings);
-    }
+  }
+
+  resetTimer() {
+    this.playSound('click');
+    this.showToast('⏹ ส่งคำสั่งยกเลิก/รีเซ็ตไปยังเครื่อง ESP32...');
+    window.focusDockFirebase.triggerCancel();
+    this.resetTimerUI();
   }
 
   // Ticking function

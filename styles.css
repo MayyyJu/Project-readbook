@@ -516,6 +516,79 @@ body {
   color: var(--text-main);
 }
 
+/* AMBIENT ENVIRONMENT SENSORS CARD (OLED Sub Mirror) */
+.env-sensor-card {
+  border-radius: var(--radius-lg);
+  padding: 12px 14px;
+  margin-bottom: 18px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-sm);
+  transition: all 0.3s ease;
+}
+
+.env-sensor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.env-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.env-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: rgba(52, 94, 73, 0.1);
+  color: var(--sage-main);
+  font-weight: 500;
+}
+
+.env-sensor-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.env-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 8px 4px;
+  background: var(--bg-app);
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(0, 0, 0, 0.04);
+}
+
+.env-item-icon {
+  font-size: 16px;
+  margin-bottom: 2px;
+}
+
+.env-item-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.env-item-label {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.env-item-val {
+  font-size: 12px;
+  font-weight: 700;
+  font-family: var(--font-en);
+  color: var(--text-main);
+  margin-top: 1px;
+}
+
 /* TIMER & CIRCULAR PROGRESS HERO CARD */
 .timer-hero-card {
   background: var(--bg-card);

@@ -1,16 +1,16 @@
-// firebase-config.js - Firebase Realtime Database Manager with Offline Simulation Support
+// firebase-config.js - Firebase Realtime Database Manager for ESP32 & Web Sync
 class FirebaseSyncManager {
   constructor() {
     this.db = null;
+    this.auth = null;
     this.app = null;
     this.isConnected = false;
-    this.isDemoMode = true;
-    this.listeners = [];
+    this.isDemoMode = false;
+    this.connectionListeners = [];
     this.config = this.loadConfig();
-    this.deviceNode = this.config.deviceNodeId || 'focus_dock_01';
   }
 
-  // Load saved credentials from localStorage
+  // Load saved credentials from localStorage or fallback to default ESP32 credentials
   loadConfig() {
     try {
       const saved = localStorage.getItem('focusdock_firebase_config');
@@ -21,71 +21,101 @@ class FirebaseSyncManager {
       console.warn('Could not load saved Firebase config:', e);
     }
     return {
-      apiKey: '',
-      authDomain: '',
-      databaseURL: '',
-      projectId: '',
-      storageBucket: '',
-      messagingSenderId: '',
-      appId: '',
-      deviceNodeId: 'focus_dock_01'
+      apiKey: 'AIzaSyBgYBkuAVq-PdwWJxo4gmyyB-O4Xilsar8',
+      databaseURL: 'https://readbook-may-default-rtdb.asia-southeast1.firebasedatabase.app/',
+      projectId: 'readbook-may',
+      userEmail: 'test0readbook@timer.com',
+      userPassword: 'Mayyynarakkk83'
     };
   }
 
   // Save credentials to localStorage
   saveConfig(newConfig) {
     this.config = { ...this.config, ...newConfig };
-    this.deviceNode = this.config.deviceNodeId || 'focus_dock_01';
     localStorage.setItem('focusdock_firebase_config', JSON.stringify(this.config));
   }
 
-  // Try initializing live Firebase connection
-  async initializeFirebase(onStateChangeCallback) {
-    if (!this.config.databaseURL && !this.config.apiKey) {
-      console.log('No Firebase config provided. Operating in Demo/Local mode.');
+  // Initialize live Firebase connection with Email/Password Auth
+  async initializeFirebase(onStatusCallback, onLogsCallback, onSessionsCallback) {
+    if (!this.config.databaseURL || !this.config.apiKey) {
+      console.warn('Firebase config missing databaseURL or apiKey');
       this.isDemoMode = true;
       this.isConnected = false;
+      this.notifyConnectionState(false);
       return false;
     }
 
     try {
-      // Check if Firebase Compat SDK is loaded from CDN
       if (typeof firebase === 'undefined') {
-        console.warn('Firebase SDK not loaded. Operating in Demo/Local mode.');
+        console.warn('Firebase SDK not loaded.');
         this.isDemoMode = true;
+        this.isConnected = false;
+        this.notifyConnectionState(false);
         return false;
       }
 
-      // Initialize App if not already initialized
+      // Initialize App
       if (!firebase.apps.length) {
         this.app = firebase.initializeApp({
           apiKey: this.config.apiKey,
-          authDomain: this.config.authDomain,
           databaseURL: this.config.databaseURL,
-          projectId: this.config.projectId,
-          storageBucket: this.config.storageBucket,
-          messagingSenderId: this.config.messagingSenderId,
-          appId: this.config.appId
+          projectId: this.config.projectId
         });
       } else {
         this.app = firebase.app();
       }
 
       this.db = firebase.database();
+
+      // Sign in if auth SDK is present and credentials exist
+      if (typeof firebase.auth === 'function' && this.config.userEmail && this.config.userPassword) {
+        try {
+          await firebase.auth().signInWithEmailAndPassword(this.config.userEmail, this.config.userPassword);
+          console.log('Firebase Authenticated with user:', this.config.userEmail);
+        } catch (authErr) {
+          console.warn('Firebase Auth notice (will attempt anonymous or direct access):', authErr.message);
+        }
+      }
+
       this.isDemoMode = false;
       this.isConnected = true;
-      console.log('Firebase successfully connected!');
+      console.log('Firebase Realtime Database initialized successfully!');
+      this.notifyConnectionState(true);
 
-      // Setup real-time listener for device state
-      const stateRef = this.db.ref(`devices/${this.deviceNode}/state`);
-      stateRef.on('value', (snapshot) => {
+      // 1. Real-time listener for /status from ESP32
+      const statusRef = this.db.ref('status');
+      statusRef.on('value', (snapshot) => {
         const val = snapshot.val();
-        if (val && typeof onStateChangeCallback === 'function') {
-          onStateChangeCallback(val);
+        if (val && typeof onStatusCallback === 'function') {
+          onStatusCallback(val);
         }
+      }, (err) => {
+        console.warn('Error reading /status:', err);
       });
 
-      // Track connectivity status
+      // 2. Real-time listener for /logs (Distractions / Pickups)
+      const logsRef = this.db.ref('logs');
+      logsRef.limitToLast(50).on('value', (snapshot) => {
+        const val = snapshot.val();
+        if (val && typeof onLogsCallback === 'function') {
+          onLogsCallback(val);
+        }
+      }, (err) => {
+        console.warn('Error reading /logs:', err);
+      });
+
+      // 3. Real-time listener for /sessions (Completed focus intervals)
+      const sessionsRef = this.db.ref('sessions');
+      sessionsRef.limitToLast(50).on('value', (snapshot) => {
+        const val = snapshot.val();
+        if (val && typeof onSessionsCallback === 'function') {
+          onSessionsCallback(val);
+        }
+      }, (err) => {
+        console.warn('Error reading /sessions:', err);
+      });
+
+      // 4. Track connectivity state
       const connectedRef = this.db.ref('.info/connected');
       connectedRef.on('value', (snap) => {
         this.isConnected = snap.val() === true;
@@ -94,19 +124,20 @@ class FirebaseSyncManager {
 
       return true;
     } catch (err) {
-      console.error('Firebase initialization failed:', err);
+      console.error('Firebase initialization error:', err);
       this.isConnected = false;
       this.isDemoMode = true;
+      this.notifyConnectionState(false);
       return false;
     }
   }
 
   onConnectionChange(callback) {
-    this.listeners.push(callback);
+    this.connectionListeners.push(callback);
   }
 
   notifyConnectionState(status) {
-    this.listeners.forEach((cb) => {
+    this.connectionListeners.forEach((cb) => {
       try {
         cb(status);
       } catch (e) {
@@ -115,75 +146,70 @@ class FirebaseSyncManager {
     });
   }
 
-  // Send control command (Start / Pause / Reset) to Firebase
-  async sendCommand(command, mode, settings) {
-    const payload = {
-      action: command, // 'START', 'PAUSE', 'RESET', 'CHANGE_MODE'
-      mode: mode,
-      settings: settings,
-      triggeredBy: 'web',
-      timestamp: Date.now()
-    };
-
-    if (this.db && !this.isDemoMode) {
-      try {
-        await this.db.ref(`devices/${this.deviceNode}/command`).set(payload);
-        return true;
-      } catch (err) {
-        console.error('Failed to send command to Firebase:', err);
-        return false;
-      }
-    } else {
-      // In Demo Mode: simulate instant dispatch
-      console.log('[Demo Mode] Command dispatched:', payload);
+  // Trigger START from Web to ESP32 via /config
+  async triggerStart(modeNum, durationSec) {
+    if (!this.db || this.isDemoMode) {
+      console.log('[Demo Mode] triggerStart simulated:', { modeNum, durationSec });
       return true;
     }
-  }
 
-  // Sync settings (Study duration, Break duration, Detox duration) to Firebase
-  async updateSettings(settings) {
-    if (this.db && !this.isDemoMode) {
-      try {
-        await this.db.ref(`devices/${this.deviceNode}/settings`).set({
-          studyMinutes: Number(settings.studyMinutes),
-          breakMinutes: Number(settings.breakMinutes),
-          detoxMinutes: Number(settings.detoxMinutes),
-          updatedAt: Date.now()
-        });
-        return true;
-      } catch (err) {
-        console.error('Failed to update settings in Firebase:', err);
-        return false;
-      }
+    try {
+      await this.db.ref('config').update({
+        mode: Number(modeNum),
+        durationSec: Number(durationSec),
+        trigger: true,
+        cancel: false,
+        triggeredBy: 'web',
+        updatedAt: Date.now()
+      });
+      console.log('Dispatched /config/trigger = true to ESP32');
+      return true;
+    } catch (err) {
+      console.error('Failed to trigger start on Firebase:', err);
+      return false;
     }
-    return true;
   }
 
-  // Push a new pickup record to Firebase Realtime Database
-  async recordPickupEvent(pickupEvent) {
-    if (this.db && !this.isDemoMode) {
-      try {
-        const newRef = this.db.ref(`devices/${this.deviceNode}/pickups`).push();
-        await newRef.set(pickupEvent);
-        return newRef.key;
-      } catch (err) {
-        console.error('Failed to record pickup event to Firebase:', err);
-      }
+  // Trigger CANCEL/RESET from Web to ESP32 via /config
+  async triggerCancel() {
+    if (!this.db || this.isDemoMode) {
+      console.log('[Demo Mode] triggerCancel simulated');
+      return true;
     }
-    return pickupEvent.id;
+
+    try {
+      await this.db.ref('config').update({
+        cancel: true,
+        trigger: false,
+        triggeredBy: 'web',
+        updatedAt: Date.now()
+      });
+      console.log('Dispatched /config/cancel = true to ESP32');
+      return true;
+    } catch (err) {
+      console.error('Failed to trigger cancel on Firebase:', err);
+      return false;
+    }
   }
 
-  // Update hardware live status (used by hardware or simulator)
-  async updateLiveHardwareState(stateUpdates) {
-    if (this.db && !this.isDemoMode) {
-      try {
-        await this.db.ref(`devices/${this.deviceNode}/state`).update({
-          ...stateUpdates,
-          lastUpdated: Date.now()
-        });
-      } catch (err) {
-        console.error('Failed to update hardware state:', err);
-      }
+  // Update mode & duration configuration on ESP32
+  async updateConfig(modeNum, durationSec) {
+    if (!this.db || this.isDemoMode) {
+      console.log('[Demo Mode] updateConfig simulated:', { modeNum, durationSec });
+      return true;
+    }
+
+    try {
+      await this.db.ref('config').update({
+        mode: Number(modeNum),
+        durationSec: Number(durationSec),
+        updatedAt: Date.now()
+      });
+      console.log('Updated /config mode & durationSec on ESP32');
+      return true;
+    } catch (err) {
+      console.error('Failed to update config on Firebase:', err);
+      return false;
     }
   }
 }
