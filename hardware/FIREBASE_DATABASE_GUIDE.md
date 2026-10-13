@@ -1,108 +1,117 @@
-# คู่มือการตั้งค่า Firebase Realtime Database และเชื่อมต่อตัวเครื่อง
+# คู่มือระบบเชื่อมต่อ Firebase Realtime Database & ฮาร์ดแวร์ FocusDock
 
-ระบบ **FocusDock** ใช้ **Firebase Realtime Database** ในการรับส่งข้อมูลระหว่างแท่นวางมือถือ (ESP32) และเว็บแอปพลิเคชันบนมือถือแบบสองทาง (Two-Way Realtime Sync)
-
----
-
-## 1. วิธีสร้างและตั้งค่า Firebase Project
-
-1. เข้าเว็บไซต์ [Firebase Console](https://console.firebase.google.com/) แล้วล็อกอินด้วย Google Account
-2. กด **"Add project"** (เพิ่มโปรเจกต์)
-   - ตั้งชื่อโปรเจกต์ เช่น `focus-dock-app`
-   - สามารถปิด Google Analytics ได้ แล้วกด **Create Project**
-3. สร้าง **Realtime Database**:
-   - ในเมนูด้านซ้าย เลือก **Build** > **Realtime Database**
-   - กดปุ่ม **Create Database**
-   - เลือก Location (เช่น `Singapore (asia-southeast1)` หรือ `United States`)
-   - เลือก **Start in test mode** (โหมดทดสอบเพื่อให้บอร์ดและเว็บอ่านเขียนได้ทันที) แล้วกด **Enable**
-4. คัดลอก **Database URL**:
-   - URL จะแสดงอยู่ด้านบนของแท็บ Data เช่น:  
-     `https://focus-dock-app-default-rtdb.firebaseio.com/`
-5. นำ **Web API Key** และ **Project ID**:
-   - ไปที่ไอคอนรูปเฟือง ⚙️ > **Project settings**
-   - ในส่วนล่างหัวข้อ **Your apps** กดสร้าง Web App `</>`
-   - คุณจะได้ `apiKey`, `projectId`, และ `databaseURL` เพื่อนำมากรอกในหน้าเว็บที่แท็บ **"ตั้งค่า"**
+ระบบ **FocusDock (You've got this)** รองรับการทำงานร่วมกันระหว่าง **บอร์ด ESP32** และ **เว็บแอปพลิเคชัน** แบบสองทาง (Two-Way Realtime Sync) ผ่าน **Firebase Realtime Database**
 
 ---
 
-## 2. โครงสร้างข้อมูล JSON (Database Schema)
+## 1. ข้อมูลการเชื่อมต่อ Firebase (Config)
 
-โครงสร้างฐานข้อมูลที่ตัวเครื่องและเว็บแอปใช้งานร่วมกัน:
+ค่าที่กำหนดไว้ในตัวเครื่องและหน้าเว็บ:
+- **Database URL:** `https://readbook-may-default-rtdb.asia-southeast1.firebasedatabase.app/`
+- **Web API Key:** `AIzaSyBgYBkuAVq-PdwWJxo4gmyyB-O4Xilsar8`
+- **Auth Email:** `test0readbook@timer.com`
+- **Auth Password:** `Mayyynarakkk83`
+- **Wi-Fi SSID:** `1272_2.4GHz`
+- **Wi-Fi Password:** `meijimamrom`
 
+---
+
+## 2. โครงสร้างฐานข้อมูล (Database Schema)
+
+### 2.1 โหนด `/config` (เว็บ ➡️ เครื่อง)
+ใช้สำหรับสั่งงานจากหน้าเว็บไปยังตัวเครื่อง ESP32:
 ```json
 {
-  "devices": {
-    "focus_dock_01": {
-      "state": {
-        "phonePickedUp": false,
-        "lastStateChange": 1728663200,
-        "command": "START_TOGGLE",
-        "lastActionBy": "hardware",
-        "actionTimestamp": 1728663200
-      },
-      "settings": {
-        "studyMinutes": 25,
-        "breakMinutes": 5,
-        "detoxMinutes": 45,
-        "updatedAt": 1728663200
-      },
-      "command": {
-        "action": "START",
-        "mode": "study",
-        "triggeredBy": "web",
-        "timestamp": 1728663200
-      },
-      "pickups": {
-        "-O9xyz123": {
-          "id": "pk_1728663200",
-          "date": "2026-10-11",
-          "dayName": "อาทิตย์",
-          "startTime": "14:20:15",
-          "endTime": "14:23:45",
-          "durationSeconds": 210,
-          "durationFormatted": "3 นาที 30 วินาที",
-          "mode": "study",
-          "note": "หยิบขณะอ่านหนังสือ"
-        }
-      }
-    }
+  "mode": 1,
+  "durationSec": 1500,
+  "trigger": false,
+  "cancel": false,
+  "triggeredBy": "web",
+  "updatedAt": 1728789000000
+}
+```
+- `mode`: 1 (โหมดอ่านหนังสือ - Study), 2 (โหมดพักจากมือถือ - Detox)
+- `durationSec`: เวลาที่ต้องการจับ (วินาที) เช่น 1500 วิ = 25 นาที
+- `trigger`: เมื่อหน้าเว็บกด **"เริ่มจับเวลา"** จะเซ็ตค่าเป็น `true` -> ESP32 อ่านเจอจะเริ่มนับถอยหลัง 15 วินาที แล้วเคลียร์เป็น `false`
+- `cancel`: เมื่อหน้าเว็บกด **"ยกเลิก / รีเซ็ต"** จะเซ็ตค่าเป็น `true` -> ESP32 จะหยุดและกลับสู่สถานะ IDLE
+
+### 2.2 โหนด `/status` (เครื่อง ➡️ เว็บ)
+ESP32 ส่งสถานะสดทุกๆ 2 วินาที:
+```json
+{
+  "state": "RUNNING",
+  "remainingSec": 1498,
+  "prepareSec": 0,
+  "currentMode": 1,
+  "durationSec": 1500,
+  "phonePlaced": true,
+  "handDetected": false,
+  "temp": 28.5,
+  "hum": 65.0,
+  "roomLux": 420.0,
+  "phoneLux": 2.1
+}
+```
+- `state`: `"IDLE"` | `"PREPARE"` | `"RUNNING"` | `"CONFIRM_CANCEL"` | `"FINISHED"`
+- `remainingSec`: เวลาที่เหลือในการจับเวลา (หรือเวลานับถอยหลังช่วงเตรียมตัว)
+- `prepareSec`: วินาทีที่เหลือในช่วงนับถอยหลังก่อนเริ่ม
+- `phonePlaced`: `true` = มือถือวางอยู่บนแท่นพัก (phoneLux < 15 lx)
+
+### 2.3 โหนด `/logs` (ประวัติการเสียสมาธิ / หยิบมือถือ)
+บันทึกประวัติย้อนหลังทุกครั้งที่เกิดเหตุการณ์:
+```json
+{
+  "1728789120": {
+    "event": "phone_removed",
+    "mode": 1,
+    "remainingSec": 1240,
+    "timestamp": 1728789120000
+  }
+}
+```
+
+### 2.4 โหนด `/sessions` (ประวัติการโฟกัสที่สำเร็จ)
+บันทึกรอบการอ่านหนังสือหรือดีท็อกซ์ที่ทำสำเร็จครบเวลา:
+```json
+{
+  "1728790500": {
+    "mode": 1,
+    "durationSec": 1500,
+    "completed": true,
+    "timestamp": 1728790500000
   }
 }
 ```
 
 ---
 
-## 3. Firebase Security Rules (กฎความปลอดภัย)
+## 3. ลำดับการทำงานและการนับถอยหลัง (Countdown Flow)
 
-ในแท็บ **Rules** ของ Realtime Database แนะนำให้ใช้กฎสำหรับทดสอบเบื้องต้น:
+### 3.1 สั่งเริ่มผ่านหน้าเว็บ (Web Start):
+1. ผู้ใช้กดปุ่ม **"เริ่มจับเวลา"** บนหน้าเว็บ
+2. หน้าเว็บจะส่ง `/config/trigger = true` และเริ่มแสดงเวลานับถอยหลัง **15 วินาที**
+3. เครื่อง ESP32 รับคำสั่ง -> ส่งเสียงเตือน -> หน้าจอ OLED แสดง `WEB START (15s)` พร้อมนับถอยหลัง `15, 14, 13...`
+4. **จุดประสงค์:** เพื่อให้ผู้ใช้มีเวลา 15 วินาทีในการวางมือถือลงบนแท่น
+5. เมื่อครบ 15 วินาที เครื่องจะส่งเสียงสัญญาณยาวและเริ่มจับเวลาจริงทันที (หากยังไม่วางมือถือ เครื่องจะส่งเสียงเตือน Alert)
 
-```json
-{
-  "rules": {
-    ".read": true,
-    ".write": true
-  }
-}
-```
-
----
-
-## 4. แผนผังการต่อสายฮาร์ดแวร์ (ESP32 Pinout)
-
-| อุปกรณ์ | ขาของอุปกรณ์ | ขาบน ESP32 | หมายเหตุ |
-| :--- | :--- | :--- | :--- |
-| **Push Button** | ขาที่ 1 | GPIO 18 | สั่งเริ่ม/พักจับเวลา |
-| | ขาที่ 2 | GND | ใช้โหมด `INPUT_PULLUP` |
-| **Ultrasonic HC-SR04** | VCC | 5V / VIN | ตรวจจับการวางมือถือ |
-| | GND | GND | |
-| | TRIG | GPIO 5 | ส่งคลื่น |
-| | ECHO | GPIO 4 | รับคลื่นสะท้อน |
-| **LED แสดงสถานะ** | Anode (+) | GPIO 2 | ไฟแสดงสถานะ |
-| | Cathode (-) | GND (ผ่านตัวต้านทาน 220Ω) | |
-| **Buzzer** | ขั้วบวก (+) | GPIO 19 | ส่งเสียงเตือนสั้นๆ เมื่อหยิบมือถือ |
-| | ขั้วลบ (-) | GND | |
+### 3.2 สั่งเริ่มผ่านปุ่มบนตัวเครื่อง (Physical Button Start):
+1. **เงื่อนไขสำคัญ:** ต้องวางมือถือลงบนแท่นให้เรียบร้อยก่อน (`phonePlaced == true`)
+2. หากยังไม่วางมือถือ แล้วกดปุ่มเขียว -> เครื่องจะส่งเสียงเตือน Alert และหน้าจอขึ้นเตือน `WARN: Place Phone!`
+3. หากวางมือถือแล้ว กดปุ่มเขียว -> เครื่องจะส่งเสียงปี๊บและนับถอยหลัง **3 วินาที** (`3, 2, 1`)
+4. เมื่อครบ 3 วินาที จะเริ่มจับเวลาจริงทันที
 
 ---
 
-## 5. การทดสอบการทำงาน
-- หากยังไม่มีบอร์ด ESP32 หรือยังไม่ได้ต่อสาย สามารถเปิดหน้าเว็บไปที่แท็บ **"ตั้งค่า"** แล้วใช้ **"แผงจำลองเครื่องจริง (Hardware Test)"** เพื่อทดสอบยกมือถือขึ้น/วางลง หรือกดปุ่มได้ทันที!
+## 4. แผนผังการต่อวงจร ESP32 (Pinout)
+
+| อุปกรณ์ | ขาบนบอร์ด ESP32 | รายละเอียดการต่อ |
+| :--- | :--- | :--- |
+| **ปุ่มเขียว (Start / Repeat)** | **RX2 (GPIO 16)** | ขาหนึ่งต่อ GPIO16, อีกขาต่อ GND (INPUT_PULLUP) |
+| **ปุ่มแดง (Power / Cancel)** | **TX2 (GPIO 17)** | กดสั้น=ขอยกเลิก / กดค้าง 2 วิ=Power Off (Deep Sleep) |
+| **ปุ่มเหลือง (Mode Switch)** | **D15 (GPIO 15)** | กดเพื่อสลับโหมด อ่านหนังสือ ↔ พักจากมือถือ |
+| **ปุ่มฟ้า (Time Adjust)** | **D5 (GPIO 5)** | กดสั้น=+5 นาที / กดค้าง 1.5 วิ=-5 นาที |
+| **Buzzer** | **D2 (GPIO 2)** | สัญญาณเสียงเตือนและเสียงนับถอยหลัง |
+| **เซนเซอร์อุณหภูมิ/ความชื้น DHT11** | **D4 (GPIO 4)** | ขา Data ต่อ GPIO4 |
+| **เซนเซอร์อินฟราเรดตรวจจับมือ IR** | **D19 (GPIO 19)** | ตรวจจับการเอามือมาใกล้แท่นวาง |
+| **จอหลัก 0.96" + BH1750 x2** | **I2C_Main: SDA (D21), SCL (D22)** | บัส I2C หลัก (Address: OLED 0x3C, BH1750 แสงห้อง 0x23, BH1750 ใต้แท่น 0x5C) |
+| **จอรอง 0.91" (OLED สภาพแวดล้อม)** | **I2C_Sub: SDA (D23), SCL (D18)** | บัส I2C รอง แยกบัสอิสระเพื่อไม่ให้ชน Address จอหลัก |

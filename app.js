@@ -1,12 +1,20 @@
 // app.js - Main Application Logic, State Machine, and UI Controller for FocusDock
 
+function formatSecondsToMinSec(sec) {
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  if (m === 0) return `${s} วินาที`;
+  if (s === 0) return `${m} นาที`;
+  return `${m} นาที ${s} วินาที`;
+}
+
 class FocusDockApp {
   constructor() {
-    // 1. Load or initialize data
-    this.initialData = generatePastWeekData();
-    this.pickups = this.loadStoredPickups() || this.initialData.allPickups;
-    this.weeklyData = this.initialData.weeklySummary;
-    this.sessions = this.initialData.allSessions;
+    // 1. Real Data Management (No Mock Data)
+    this.pickups = this.loadStoredPickups() || [];
+    this.weeklyData = [];
+    this.sessions = [];
+    this.calculateWeeklyStats();
 
     // 2. Settings
     this.settings = this.loadSettings();
@@ -123,10 +131,16 @@ class FocusDockApp {
 
   saveSettings() {
     localStorage.setItem('focusdock_settings', JSON.stringify(this.settings));
+    const modeNum = this.activeMode === 'study' ? 1 : 2;
+    const durationSec = (this.activeMode === 'study' ? this.settings.studyMinutes : this.settings.detoxMinutes) * 60;
+    if (window.focusDockFirebase) {
+      window.focusDockFirebase.updateConfig(modeNum, durationSec);
+      if (typeof window.focusDockFirebase.updateSettings === 'function') {
+        window.focusDockFirebase.updateSettings(this.settings);
+      }
+    }
     if (window.esp32Direct) {
       window.esp32Direct.dispatchDirectSettings(this.settings);
-    } else if (window.focusDockFirebase) {
-      window.focusDockFirebase.updateSettings(this.settings);
     }
   }
 
@@ -142,6 +156,38 @@ class FocusDockApp {
     localStorage.setItem('focusdock_pickups', JSON.stringify(this.pickups));
   }
 
+  // Calculate real 7-day statistics ending today (100% dynamic from real hardware logs)
+  calculateWeeklyStats() {
+    const today = new Date();
+    const dayNamesThai = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
+    const dayShortThai = ['อา.', 'จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.', 'ส.'];
+    const days = [];
+
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(today.getDate() - i);
+      const dateStr = d.toISOString().split('T')[0];
+      const dayPickups = (this.pickups || []).filter((p) => p.date === dateStr);
+      const count = dayPickups.length;
+      const totalSec = dayPickups.reduce((acc, curr) => acc + (Number(curr.durationSeconds) || Number(curr.durationSec) || 0), 0);
+      const totalMin = Math.round(totalSec / 60);
+      const avgMin = count > 0 ? Number(((totalSec / count) / 60).toFixed(1)) : 0;
+
+      days.push({
+        date: dateStr,
+        dayFull: dayNamesThai[d.getDay()],
+        dayShort: dayShortThai[d.getDay()],
+        pickupsCount: count,
+        totalSeconds: totalSec,
+        totalMinutes: totalMin,
+        avgMinutesPerPickup: avgMin,
+        isToday: i === 0
+      });
+    }
+
+    this.weeklyData = days;
+  }
+
   // DOM Selection
   initDOM() {
     // Navigation
@@ -154,6 +200,7 @@ class FocusDockApp {
     this.statusBarClock = document.getElementById('statusBarClock');
     this.statusDot = document.getElementById('statusDot');
     this.statusLabel = document.getElementById('statusLabel');
+    this.btnHeaderStatus = document.getElementById('btnHeaderStatus');
 
     // Mode Bar
     this.modeBtnStudy = document.getElementById('modeBtnStudy');
@@ -214,6 +261,7 @@ class FocusDockApp {
 
     // Firebase inputs
     this.cfgDatabaseUrl = document.getElementById('cfgDatabaseUrl');
+    this.cfgUserEmail = document.getElementById('cfgUserEmail');
     this.cfgApiKey = document.getElementById('cfgApiKey');
     this.cfgProjectId = document.getElementById('cfgProjectId');
     this.cfgDeviceNode = document.getElementById('cfgDeviceNode');
@@ -247,101 +295,115 @@ class FocusDockApp {
     this.toastMessage = document.getElementById('toastMessage');
 
     // Fill settings inputs with current values
-    this.inputStudyMinutes.value = this.settings.studyMinutes;
-    this.inputBreakMinutes.value = this.settings.breakMinutes;
-    this.inputDetoxMinutes.value = this.settings.detoxMinutes;
+    if (this.inputStudyMinutes) this.inputStudyMinutes.value = this.settings.studyMinutes;
+    if (this.inputBreakMinutes) this.inputBreakMinutes.value = this.settings.breakMinutes;
+    if (this.inputDetoxMinutes) this.inputDetoxMinutes.value = this.settings.detoxMinutes;
 
     // Fill Firebase credentials if saved
-    const fbCfg = window.focusDockFirebase.config;
-    if (fbCfg.databaseURL) this.cfgDatabaseUrl.value = fbCfg.databaseURL;
-    if (fbCfg.apiKey) this.cfgApiKey.value = fbCfg.apiKey;
-    if (fbCfg.projectId) this.cfgProjectId.value = fbCfg.projectId;
-    if (fbCfg.deviceNodeId) this.cfgDeviceNode.value = fbCfg.deviceNodeId;
+    if (window.focusDockFirebase && window.focusDockFirebase.config) {
+      const fbCfg = window.focusDockFirebase.config;
+      if (this.cfgDatabaseUrl && fbCfg.databaseURL) this.cfgDatabaseUrl.value = fbCfg.databaseURL;
+      if (this.cfgUserEmail && fbCfg.userEmail) this.cfgUserEmail.value = fbCfg.userEmail;
+      if (this.cfgApiKey && fbCfg.apiKey) this.cfgApiKey.value = fbCfg.apiKey;
+      if (this.cfgProjectId && fbCfg.projectId) this.cfgProjectId.value = fbCfg.projectId;
+      if (this.cfgDeviceNode && fbCfg.deviceNodeId) this.cfgDeviceNode.value = fbCfg.deviceNodeId;
+    }
   }
 
   // Bind All Event Listeners
   bindEvents() {
     // Tab switching
-    this.navTabs.forEach((tab) => {
-      tab.addEventListener('click', () => {
-        const targetId = tab.getAttribute('data-target');
-        this.switchTab(targetId);
+    if (this.navTabs) {
+      this.navTabs.forEach((tab) => {
+        tab.addEventListener('click', (e) => {
+          const btn = e.currentTarget || tab;
+          const targetId = btn.getAttribute('data-target');
+          if (targetId) this.switchTab(targetId);
+        });
       });
-    });
+    }
+
+    // Header Status Pill
+    if (this.btnHeaderStatus) {
+      this.btnHeaderStatus.addEventListener('click', () => {
+        this.switchTab('tabSettings');
+        this.showToast('⚙️ การตั้งค่า & สถานะเชื่อมต่อ');
+      });
+    }
 
     // Frame preview toggle on desktop
-    this.btnToggleFrame.addEventListener('click', () => {
-      this.appFrame.classList.toggle('desktop-fullscreen');
-      const isFull = this.appFrame.classList.contains('desktop-fullscreen');
-      if (isFull) {
-        this.appFrame.style.maxWidth = '100%';
-        this.appFrame.style.borderRadius = '0';
-        this.appFrame.style.border = 'none';
-        this.appFrame.style.minHeight = '100vh';
-      } else {
-        this.appFrame.style.maxWidth = 'var(--app-max-width)';
-        this.appFrame.style.borderRadius = '44px';
-        this.appFrame.style.border = '8px solid rgba(28, 36, 33, 0.12)';
-        this.appFrame.style.minHeight = '844px';
-      }
-    });
+    if (this.btnToggleFrame && this.appFrame) {
+      this.btnToggleFrame.addEventListener('click', () => {
+        this.appFrame.classList.toggle('desktop-fullscreen');
+        const isFull = this.appFrame.classList.contains('desktop-fullscreen');
+        this.btnToggleFrame.textContent = isFull ? '📱 มุมมองมือถือ' : '📱 สลับมุมมองมือถือ / เต็มจอ';
+      });
+    }
 
     // Mode Switching
-    this.modeBtnStudy.addEventListener('click', () => this.switchMode('study'));
-    this.modeBtnDetox.addEventListener('click', () => this.switchMode('detox'));
+    if (this.modeBtnStudy) this.modeBtnStudy.addEventListener('click', () => this.switchMode('study'));
+    if (this.modeBtnDetox) this.modeBtnDetox.addEventListener('click', () => this.switchMode('detox'));
 
     // Timer Controls
-    this.btnMainAction.addEventListener('click', () => this.handleMainAction());
-    this.btnPauseAction.addEventListener('click', () => this.togglePause());
-    this.btnResetAction.addEventListener('click', () => this.resetTimer());
-    this.btnGoSettings.addEventListener('click', () => this.switchTab('tabSettings'));
+    if (this.btnMainAction) this.btnMainAction.addEventListener('click', () => this.handleMainAction());
+    if (this.btnPauseAction) this.btnPauseAction.addEventListener('click', () => this.togglePause());
+    if (this.btnResetAction) this.btnResetAction.addEventListener('click', () => this.resetTimer());
+    if (this.btnGoSettings) this.btnGoSettings.addEventListener('click', () => this.switchTab('tabSettings'));
 
     // Filter Chips for History
-    this.filterChips.forEach((chip) => {
-      chip.addEventListener('click', () => {
-        this.filterChips.forEach((c) => c.classList.remove('active'));
-        chip.classList.add('active');
-        const filter = chip.getAttribute('data-filter');
-        this.renderHistory(filter);
+    if (this.filterChips) {
+      this.filterChips.forEach((chip) => {
+        chip.addEventListener('click', () => {
+          this.filterChips.forEach((c) => c.classList.remove('active'));
+          chip.classList.add('active');
+          const filter = chip.getAttribute('data-filter');
+          this.renderHistory(filter);
+        });
       });
-    });
+    }
 
     // Stats Metric Switcher
-    this.btnMetricCount.addEventListener('click', () => {
-      this.selectedChartMetric = 'count';
-      this.btnMetricCount.classList.add('active');
-      this.btnMetricMinutes.classList.remove('active');
-      this.renderWeeklyStats();
-    });
+    if (this.btnMetricCount) {
+      this.btnMetricCount.addEventListener('click', () => {
+        this.selectedChartMetric = 'count';
+        this.btnMetricCount.classList.add('active');
+        if (this.btnMetricMinutes) this.btnMetricMinutes.classList.remove('active');
+        this.renderWeeklyStats();
+      });
+    }
 
-    this.btnMetricMinutes.addEventListener('click', () => {
-      this.selectedChartMetric = 'minutes';
-      this.btnMetricMinutes.classList.add('active');
-      this.btnMetricCount.classList.remove('active');
-      this.renderWeeklyStats();
-    });
+    if (this.btnMetricMinutes) {
+      this.btnMetricMinutes.addEventListener('click', () => {
+        this.selectedChartMetric = 'minutes';
+        this.btnMetricMinutes.classList.add('active');
+        if (this.btnMetricCount) this.btnMetricCount.classList.remove('active');
+        this.renderWeeklyStats();
+      });
+    }
 
     // Save Mode Durations
-    this.btnSaveModeSettings.addEventListener('click', () => {
-      const studyM = parseInt(this.inputStudyMinutes.value, 10) || 25;
-      const breakM = parseInt(this.inputBreakMinutes.value, 10) || 5;
-      const detoxM = parseInt(this.inputDetoxMinutes.value, 10) || 45;
+    if (this.btnSaveModeSettings) {
+      this.btnSaveModeSettings.addEventListener('click', () => {
+        const studyM = parseInt(this.inputStudyMinutes?.value, 10) || 25;
+        const breakM = parseInt(this.inputBreakMinutes?.value, 10) || 5;
+        const detoxM = parseInt(this.inputDetoxMinutes?.value, 10) || 45;
 
-      this.settings.studyMinutes = studyM;
-      this.settings.breakMinutes = breakM;
-      this.settings.detoxMinutes = detoxM;
-      this.saveSettings();
+        this.settings.studyMinutes = studyM;
+        this.settings.breakMinutes = breakM;
+        this.settings.detoxMinutes = detoxM;
+        this.saveSettings();
 
-      if (this.timerStatus === 'idle') {
-        this.totalPhaseSeconds = (this.activeMode === 'study' ? studyM : detoxM) * 60;
-        this.remainingSeconds = this.totalPhaseSeconds;
-        this.updateTimerDisplay();
-      }
+        if (this.timerStatus === 'idle') {
+          this.totalPhaseSeconds = (this.activeMode === 'study' ? studyM : detoxM) * 60;
+          this.remainingSeconds = this.totalPhaseSeconds;
+          this.updateTimerDisplay();
+        }
 
-      this.renderPresets();
-      this.showToast('💾 บันทึกเวลาสำหรับ 2 โหมดเรียบร้อยแล้ว');
-      this.playSound('click');
-    });
+        this.renderPresets();
+        this.showToast('💾 บันทึกเวลาสำหรับ 2 โหมดเรียบร้อยแล้ว');
+        this.playSound('click');
+      });
+    }
 
     // Reconnect Firebase Button
     if (this.btnSaveFirebaseConfig) {
@@ -422,8 +484,8 @@ class FocusDockApp {
             if (this.btnConnectBleText) this.btnConnectBleText.textContent = 'ค้นหาและเชื่อมต่อกับ ESP32';
             if (this.btnConnectBle) this.btnConnectBle.classList.remove('connected');
             if (!window.focusDockFirebase.isConnected) {
-              this.statusDot.className = 'status-dot demo';
-              this.statusLabel.textContent = 'โหมดจำลอง';
+              this.statusDot.className = 'status-dot offline';
+              this.statusLabel.textContent = 'ออฟไลน์';
             }
           }
         } else if (type === 'ip') {
@@ -563,19 +625,33 @@ class FocusDockApp {
     const logList = Object.values(logs);
     if (!logList.length) return;
 
+    const dayNames = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
     const newPickups = logList
       .filter((item) => item.event === 'phone_removed' || item.event === 'hand_detected')
       .map((item, idx) => {
-        const dateObj = new Date(item.timestamp || Date.now());
-        const timeStr = dateObj.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+        const timestamp = Number(item.timestamp) || Date.now();
+        const dateObj = new Date(timestamp);
+        const dateStr = dateObj.toISOString().split('T')[0];
+        const timeStr = dateObj.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const durationSec = Number(item.durationSec) || 15;
+        const durationMinutes = Math.max(1, Math.round(durationSec / 60));
+        const mode = item.mode === 2 ? 'detox' : 'study';
+        const eventName = item.event === 'hand_detected' ? 'ตรวจพบมือแตะแท่น' : 'ยกโทรศัพท์ออกจากแท่น';
+
         return {
-          id: `log_${item.timestamp || idx}`,
-          timestamp: item.timestamp || Date.now(),
+          id: `log_${timestamp}_${idx}`,
+          timestamp,
+          date: dateStr,
+          dayName: dayNames[dateObj.getDay()],
+          startTime: timeStr,
+          endTime: timeStr,
           time: timeStr,
-          durationSec: 15,
-          durationMinutes: 1,
-          mode: item.mode === 2 ? 'detox' : 'study',
-          type: item.event === 'hand_detected' ? 'เอามือไปแตะ' : 'ยกโทรศัพท์ขึ้น'
+          durationSeconds: durationSec,
+          durationFormatted: `${durationSec} วินาที`,
+          durationMinutes,
+          mode,
+          type: eventName,
+          note: eventName
         };
       });
 
@@ -585,6 +661,7 @@ class FocusDockApp {
       if (additions.length > 0) {
         this.pickups = [...additions, ...this.pickups].slice(0, 100);
         this.saveStoredPickups();
+        this.calculateWeeklyStats();
         this.renderHistory('all');
         this.renderWeeklyStats();
         this.updatePickupStatusUI();
@@ -675,8 +752,67 @@ class FocusDockApp {
   startTimer() {
     const modeNum = this.activeMode === 'study' ? 1 : 2;
     const durationSec = (this.activeMode === 'study' ? this.settings.studyMinutes : this.settings.detoxMinutes) * 60;
-    this.showToast('🚀 ส่งคำสั่งเริ่มจับเวลาไปยังเครื่อง ESP32 แล้ว!');
-    window.focusDockFirebase.triggerStart(modeNum, durationSec);
+    
+    // Clear any active timers
+    clearInterval(this.timerInterval);
+
+    // 1. Enter prepare state: 15-second countdown (gives user time to put phone on dock)
+    this.timerStatus = 'prepare';
+    this.remainingSeconds = 15;
+    this.totalPhaseSeconds = 15;
+
+    this.btnMainActionIcon.textContent = '⏹';
+    this.btnMainActionText.textContent = 'ยกเลิก';
+    this.btnMainAction.classList.add('running');
+    this.timerCaption.textContent = '⏳ เตรียมความพร้อม (15 วิ) วางโทรศัพท์บนแท่น...';
+    this.updateTimerDisplay();
+
+    this.showToast('⏳ เริ่มนับถอยหลัง 15 วิ เพื่อให้มีเวลาเก็บมือถือบนแท่น');
+    this.playSound('click');
+
+    // 2. Dispatch start trigger to Firebase for ESP32
+    if (window.focusDockFirebase) {
+      window.focusDockFirebase.triggerStart(modeNum, durationSec);
+    }
+    if (window.esp32Direct) {
+      window.esp32Direct.dispatchDirectCommand('START', this.activeMode, this.settings);
+    }
+
+    // 3. Web ticker for 15s prepare countdown
+    this.timerInterval = setInterval(() => {
+      if (this.timerStatus !== 'prepare') {
+        clearInterval(this.timerInterval);
+        return;
+      }
+      if (this.remainingSeconds > 1) {
+        this.remainingSeconds--;
+        this.timerCaption.textContent = `⏳ เตรียมความพร้อม (${this.remainingSeconds} วิ) วางโทรศัพท์บนแท่น`;
+        this.updateTimerDisplay();
+        this.playSound('click');
+      } else {
+        // Prepare countdown finished -> Start real focus timer
+        clearInterval(this.timerInterval);
+        this.startActualFocusSession(durationSec);
+      }
+    }, 1000);
+  }
+
+  startActualFocusSession(durationSec) {
+    this.timerStatus = 'running';
+    this.totalPhaseSeconds = durationSec || ((this.activeMode === 'study' ? this.settings.studyMinutes : this.settings.detoxMinutes) * 60);
+    this.remainingSeconds = this.totalPhaseSeconds;
+
+    this.btnMainActionIcon.textContent = '⏹';
+    this.btnMainActionText.textContent = 'ยกเลิก / รีเซ็ต';
+    this.btnMainAction.classList.add('running');
+    this.timerCaption.textContent = this.activeMode === 'study' ? 'กำลังอ่านหนังสือ มีสมาธิเต็มที่' : 'กำลังพักจากมือถือ ห้ามหยิบใช้งาน';
+    this.updateTimerDisplay();
+
+    this.playSound('bell');
+    this.showToast('🚀 เริ่มต้นการจับเวลาจริงแล้ว!');
+
+    clearInterval(this.timerInterval);
+    this.timerInterval = setInterval(() => this.tickTimer(), 1000);
   }
 
   togglePause() {
@@ -712,7 +848,12 @@ class FocusDockApp {
   resetTimer() {
     this.playSound('click');
     this.showToast('⏹ ส่งคำสั่งยกเลิก/รีเซ็ตไปยังเครื่อง ESP32...');
-    window.focusDockFirebase.triggerCancel();
+    if (window.focusDockFirebase) {
+      window.focusDockFirebase.triggerCancel();
+    }
+    if (window.esp32Direct) {
+      window.esp32Direct.dispatchDirectCommand('CANCEL', this.activeMode, this.settings);
+    }
     this.resetTimerUI();
   }
 
@@ -965,33 +1106,36 @@ class FocusDockApp {
 
   // Render Pickup History Timeline
   renderHistory(filter) {
+    if (!this.pickupTimelineContainer) return;
     this.pickupTimelineContainer.innerHTML = '';
     const todayStr = new Date().toISOString().split('T')[0];
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
     const yesterdayStr = yesterday.toISOString().split('T')[0];
 
-    let filtered = this.pickups;
+    let filtered = this.pickups || [];
     if (filter === 'today') {
-      filtered = this.pickups.filter((p) => p.date === todayStr);
+      filtered = filtered.filter((p) => p.date === todayStr);
     } else if (filter === 'yesterday') {
-      filtered = this.pickups.filter((p) => p.date === yesterdayStr);
+      filtered = filtered.filter((p) => p.date === yesterdayStr);
     } else if (filter === 'study') {
-      filtered = this.pickups.filter((p) => p.mode === 'study');
+      filtered = filtered.filter((p) => p.mode === 'study');
     } else if (filter === 'detox') {
-      filtered = this.pickups.filter((p) => p.mode === 'detox');
+      filtered = filtered.filter((p) => p.mode === 'detox');
     }
 
-    if (filtered.length === 0) {
+    if (!filtered || filtered.length === 0) {
       this.pickupTimelineContainer.innerHTML = `
-        <div style="text-align: center; padding: 30px; color: var(--text-muted); font-size: 13px;">
-          ยังไม่มีรายการหยิบมือถือในหมวดหมู่นี้
+        <div style="text-align: center; padding: 44px 16px; color: var(--text-muted); font-size: 13px;">
+          <span style="font-size: 32px; display: block; margin-bottom: 8px;">📖</span>
+          <p style="font-weight: 500; color: var(--text-secondary); margin-bottom: 4px;">ยังไม่มีประวัติการหยิบมือถือ</p>
+          <p style="font-size: 11px;">ระบบจะบันทึกอัตโนมัติเมื่อตัวเครื่อง ESP32 ตรวจพบการหยิบมือถือหรือแตะแท่น</p>
         </div>
       `;
       return;
     }
 
-    filtered.slice(0, 30).forEach((item) => {
+    filtered.slice(0, 50).forEach((item) => {
       const el = document.createElement('div');
       el.className = 'pickup-log-item';
 
@@ -999,18 +1143,19 @@ class FocusDockApp {
       const modeText = item.mode === 'study' ? 'อ่านหนังสือ' : (item.mode === 'detox' ? 'พักมือถือ' : 'ปกติ');
 
       const isToday = item.date === todayStr;
-      const dateLabel = isToday ? 'วันนี้' : `${item.dayName || ''} (${item.date})`;
+      const isYesterday = item.date === yesterdayStr;
+      const dateLabel = isToday ? 'วันนี้' : (isYesterday ? 'เมื่อวาน' : `${item.dayName || ''} (${item.date || ''})`);
 
       el.innerHTML = `
         <div class="log-left">
           <div class="log-time-row">
-            <span class="log-clock">${item.startTime} - ${item.endTime}</span>
+            <span class="log-clock">${item.startTime || item.time || '--:--'}</span>
             <span class="log-mode-tag ${modeClass}">${modeText}</span>
           </div>
-          <span class="log-date-sub">${dateLabel} • ${item.note || ''}</span>
+          <span class="log-date-sub">${dateLabel} • ${item.note || item.type || ''}</span>
         </div>
         <div class="log-right">
-          <span class="log-duration-badge">${item.durationFormatted}</span>
+          <span class="log-duration-badge">${item.durationFormatted || (item.durationSeconds ? `${item.durationSeconds} วินาที` : '15 วินาที')}</span>
         </div>
       `;
       this.pickupTimelineContainer.appendChild(el);
@@ -1075,10 +1220,11 @@ class FocusDockApp {
   }
 
   updateSelectedDayCard(day) {
-    this.detailDayTitle.textContent = `${day.dayFull} (${day.date})`;
-    this.detailDayPickups.textContent = day.pickupsCount;
-    this.detailDayAvg.textContent = day.avgMinutesPerPickup;
-    this.detailDayTotal.textContent = day.totalMinutes;
+    if (!day) return;
+    if (this.detailDayTitle) this.detailDayTitle.textContent = `${day.dayFull || ''} (${day.date || ''})`;
+    if (this.detailDayPickups) this.detailDayPickups.textContent = day.pickupsCount || 0;
+    if (this.detailDayAvg) this.detailDayAvg.textContent = day.avgMinutesPerPickup || 0;
+    if (this.detailDayTotal) this.detailDayTotal.textContent = day.totalMinutes || 0;
   }
 
   // Update top phone status bar clock
@@ -1102,7 +1248,20 @@ class FocusDockApp {
   }
 }
 
-// Instantiate on DOM load
-window.addEventListener('DOMContentLoaded', () => {
-  window.focusDockApp = new FocusDockApp();
-});
+// Instant & Reliable DOM Ready Initialization
+function startFocusDockApp() {
+  if (!window.focusDockApp) {
+    try {
+      window.focusDockApp = new FocusDockApp();
+      console.log('FocusDock App initialized for real production use.');
+    } catch (err) {
+      console.error('FocusDock initialization error:', err);
+    }
+  }
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', startFocusDockApp);
+} else {
+  startFocusDockApp();
+}

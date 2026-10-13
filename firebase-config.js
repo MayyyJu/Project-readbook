@@ -148,9 +148,9 @@ class FirebaseSyncManager {
 
   // Trigger START from Web to ESP32 via /config
   async triggerStart(modeNum, durationSec) {
-    if (!this.db || this.isDemoMode) {
-      console.log('[Demo Mode] triggerStart simulated:', { modeNum, durationSec });
-      return true;
+    if (!this.db) {
+      console.warn('Firebase Database not ready yet for triggerStart');
+      return false;
     }
 
     try {
@@ -172,9 +172,9 @@ class FirebaseSyncManager {
 
   // Trigger CANCEL/RESET from Web to ESP32 via /config
   async triggerCancel() {
-    if (!this.db || this.isDemoMode) {
-      console.log('[Demo Mode] triggerCancel simulated');
-      return true;
+    if (!this.db) {
+      console.warn('Firebase Database not ready yet for triggerCancel');
+      return false;
     }
 
     try {
@@ -194,10 +194,7 @@ class FirebaseSyncManager {
 
   // Update mode & duration configuration on ESP32
   async updateConfig(modeNum, durationSec) {
-    if (!this.db || this.isDemoMode) {
-      console.log('[Demo Mode] updateConfig simulated:', { modeNum, durationSec });
-      return true;
-    }
+    if (!this.db) return false;
 
     try {
       await this.db.ref('config').update({
@@ -211,6 +208,59 @@ class FirebaseSyncManager {
       console.error('Failed to update config on Firebase:', err);
       return false;
     }
+  }
+
+  // Update complete settings schema to Firebase for persistence
+  async updateSettings(settings) {
+    if (!settings || !this.db) return false;
+    const modeNum = 1;
+    const durationSec = (settings.studyMinutes || 25) * 60;
+    try {
+      await this.db.ref('config').update({
+        mode: modeNum,
+        durationSec: durationSec,
+        studyMinutes: Number(settings.studyMinutes || 25),
+        breakMinutes: Number(settings.breakMinutes || 5),
+        detoxMinutes: Number(settings.detoxMinutes || 45),
+        updatedAt: Date.now()
+      });
+      return true;
+    } catch (err) {
+      console.warn('Failed to update settings in Firebase:', err);
+      return false;
+    }
+  }
+
+  // Record pickup/distraction event to Firebase /logs
+  async recordPickupEvent(pickup) {
+    if (!this.db || !pickup) return false;
+    try {
+      const epochMs = pickup.timestamp || Date.now();
+      const key = String(Math.floor(epochMs / 1000));
+      await this.db.ref(`logs/${key}`).set({
+        event: pickup.type || 'phone_removed',
+        mode: pickup.mode === 'detox' ? 2 : 1,
+        durationSec: pickup.durationSeconds || 15,
+        remainingSec: 0,
+        timestamp: epochMs
+      });
+      return true;
+    } catch (e) {
+      console.warn('Could not record pickup event to Firebase:', e);
+      return false;
+    }
+  }
+
+  // Unified sendCommand compatible with direct controller dispatcher
+  async sendCommand(action, mode, settings) {
+    if (action === 'START' || action === 'START_TOGGLE') {
+      const modeNum = (mode === 'detox' || mode === 2) ? 2 : 1;
+      const durationSec = ((modeNum === 2 ? settings?.detoxMinutes : settings?.studyMinutes) || 25) * 60;
+      return this.triggerStart(modeNum, durationSec);
+    } else if (action === 'CANCEL' || action === 'RESET') {
+      return this.triggerCancel();
+    }
+    return false;
   }
 }
 

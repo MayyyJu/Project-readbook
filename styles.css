@@ -130,9 +130,8 @@ body {
 .mobile-app-frame {
   width: 100%;
   max-width: var(--app-max-width);
-  height: 100%;
-  min-height: 844px;
-  max-height: 940px;
+  height: min(920px, 94vh);
+  min-height: 560px;
   background-color: var(--bg-app);
   border-radius: 44px;
   overflow: hidden;
@@ -144,9 +143,21 @@ body {
   transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
+.mobile-app-frame.desktop-fullscreen {
+  max-width: 100% !important;
+  width: 100% !important;
+  height: 100vh !important;
+  min-height: 100vh !important;
+  max-height: 100vh !important;
+  border-radius: 0 !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
 @media (max-width: 600px) {
   .mobile-app-frame {
     max-width: 100%;
+    height: 100vh;
     min-height: 100vh;
     max-height: 100vh;
     border-radius: 0;
@@ -308,10 +319,10 @@ body {
 
 /* App Main Content Area (Scrollable) */
 .app-content {
-  flex: 1;
+  flex: 1 1 auto;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 4px 18px 90px 18px;
+  padding: 8px 18px 24px 18px;
   scroll-behavior: smooth;
   -webkit-overflow-scrolling: touch;
 }
@@ -1268,27 +1279,25 @@ body {
   opacity: 1;
 }
 
-/* Bottom Tab Navigation Bar */
+/* Bottom Tab Navigation Bar (Flex-docked at bottom, never overlaps content) */
 .bottom-nav-bar {
-  position: absolute;
-  bottom: 0;
-  left: 0;
+  flex-shrink: 0;
   width: 100%;
   height: var(--bottom-bar-height);
-  background: rgba(255, 255, 255, 0.88);
+  background: rgba(255, 255, 255, 0.96);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
   border-top: 1px solid var(--border-light);
   display: flex;
   justify-content: space-around;
   align-items: center;
-  padding: 0 8px 10px 8px;
+  padding: 0 8px 6px 8px;
   z-index: 40;
 }
 
 @media (prefers-color-scheme: dark) {
   .bottom-nav-bar {
-    background: rgba(30, 35, 33, 0.88);
+    background: rgba(30, 35, 33, 0.96);
   }
 }
 
@@ -1305,6 +1314,19 @@ body {
   cursor: pointer;
   color: var(--text-muted);
   transition: all 0.2s ease;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Ensure clicks always register on parent buttons directly */
+.nav-tab-item > *,
+.mode-segment-btn > *,
+.btn-ctrl > *,
+.preview-toggle-btn > *,
+.filter-chip > *,
+.preset-chip-btn > *,
+.header-status-pill > * {
+  pointer-events: none;
 }
 
 .nav-tab-icon {

@@ -10,11 +10,6 @@
   <link rel="manifest" href="./manifest.json">
   <meta name="theme-color" content="#345E49">
 
-  <!-- Firebase Compat CDN (Works out of the box without build step) -->
-  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
-
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
@@ -22,7 +17,7 @@
   <!-- Desktop Preview Controls -->
   <div class="desktop-preview-bar">
     <button class="preview-toggle-btn" id="btnToggleFrame" title="สลับโหมดมุมมอง">
-      📱 โหมดจำลองมือถือ / เต็มจอ
+      📱 สลับมุมมองมือถือ / เต็มจอ
     </button>
   </div>
 
@@ -57,9 +52,9 @@
           </div>
         </div>
         
-        <div class="header-status-pill" id="btnHeaderStatus" title="สถานะการเชื่อมต่อ">
-          <span class="status-dot demo" id="statusDot"></span>
-          <span id="statusLabel">โหมดจำลอง</span>
+        <div class="header-status-pill" id="btnHeaderStatus" title="สถานะเชื่อมต่อ ESP32 และ Firebase">
+          <span class="status-dot online" id="statusDot"></span>
+          <span id="statusLabel">กำลังเชื่อมต่อ...</span>
         </div>
       </nav>
 
@@ -470,8 +465,12 @@
     </div>
   </div>
 
-  <!-- Scripts -->
-  <script src="./mock-data.js"></script>
+  <!-- Firebase Compat CDN (Loaded before app scripts for seamless real-time sync) -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+  <!-- Scripts (Production Realtime Sync) -->
   <script src="./firebase-config.js"></script>
   <script src="./esp32-direct.js"></script>
   <script src="./app.js"></script>
